@@ -137,6 +137,37 @@ dialog::backdrop { background: rgb(3 7 18 / .66); }
 .session-row .check { color: var(--accent); }
 .session-empty { padding: 12px 4px; color: var(--muted); font-size: .88rem; }
 
+/* Activity */
+.thinking.clickable { cursor: pointer; }
+.thinking.waiting { color: var(--warn); }
+.thinking.waiting .thinking-dots { color: var(--warn); }
+.activity-body { padding-bottom: 8px; }
+.activity-list { display: flex; flex-direction: column; gap: 2px; }
+.activity-empty { padding: 16px 2px; color: var(--muted); font-size: .9rem; }
+.step { border-radius: 10px; }
+.step-row { display: flex; align-items: center; gap: 10px; width: 100%; min-height: 44px; padding: 8px 6px; border-radius: 10px; text-align: left; font-weight: inherit; }
+.step-row:not(:disabled):active { transform: none; }
+.step-row:not(:disabled):hover { background: var(--surface-2); }
+.step-icon { width: 18px; height: 18px; flex-shrink: 0; border-radius: 50%; display: inline-flex; align-items: center; justify-content: center; font-size: .7rem; font-weight: 800; }
+.step.running .step-icon { border: 2px solid var(--surface-3); border-top-color: var(--accent); animation: spin .9s linear infinite; }
+.step.done .step-icon { background: rgb(52 211 153 / .16); color: var(--ok); }
+.step.error .step-icon { background: var(--danger-soft); color: var(--danger); }
+.step.prompt.running .step-icon { border-top-color: var(--warn); }
+.step-main { flex: 1; min-width: 0; display: flex; flex-direction: column; line-height: 1.3; }
+.step-name { font-size: .88rem; font-weight: 600; }
+.step-summary { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: .78rem; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.step.open .step-summary { white-space: pre-wrap; overflow-wrap: anywhere; }
+.step-time { flex-shrink: 0; color: var(--subtle); font-size: .75rem; font-variant-numeric: tabular-nums; }
+.step-output { margin: 0 6px 8px 34px; max-height: 9.5em; overflow: auto; padding: 8px 10px; border: 1px solid var(--border); border-radius: 8px; background: #0b111c; color: #d1d5db; font: .74rem/1.45 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; white-space: pre-wrap; overflow-wrap: anywhere; }
+.step.open .step-output { max-height: 50vh; }
+.step-text { margin: 0 6px 8px 34px; color: #d1d5db; font-size: .85rem; line-height: 1.45; display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; white-space: pre-wrap; overflow-wrap: anywhere; }
+.step.open .step-text { display: block; }
+.sheet-footer { flex-shrink: 0; padding: 4px 20px 16px; border-top: 1px solid var(--border); }
+.wide-button.solid { border: 0; background: var(--primary); color: var(--primary-fg); }
+.wide-button.solid:not(:disabled):hover { background: #e5e7eb; }
+.sheet-footer .hint { margin-bottom: 0; }
+.sheet-footer code { user-select: all; }
+
 /* Settings */
 .settings-section { padding: 16px 0; border-top: 1px solid var(--border); }
 .settings-section:first-child { border-top: 0; padding-top: 4px; }

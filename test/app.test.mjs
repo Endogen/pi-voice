@@ -24,7 +24,7 @@ class Element {
   click() { this.clicked = (this.clicked || 0) + 1; return this.listeners.click?.(); }
   scrollIntoView() { throw new Error('Conversation updates must not force-scroll.'); }
 }
-async function setup({ auto = false, speech = true, awake = true, confirmed = true, native = false, playback = false, nativePlayback = true } = {}) {
+async function setup({ auto = false, speech = true, awake = true, confirmed = true, native = false, playback = false, nativePlayback = true, nativeTerminal = true } = {}) {
   const elements = new Map();
   const prompts = [];
   const instances = [];
@@ -37,6 +37,7 @@ async function setup({ auto = false, speech = true, awake = true, confirmed = tr
       speakText: (id, text, language) => nativeCalls.push({ method: 'read', id, text, language }),
       stopReading: (id) => nativeCalls.push({ method: 'stop-reading', id }),
     } : {}),
+    ...(nativeTerminal ? { openTerminal: (session) => nativeCalls.push({ method: 'terminal', session }) } : {}),
   } : undefined;
   const utterances = [];
   class Utterance { constructor(text) { this.text = text; } }
@@ -62,6 +63,7 @@ async function setup({ auto = false, speech = true, awake = true, confirmed = tr
   const network = {
     state: () => Response.json(state),
     sessions: () => Response.json({ self: 100, sessions }),
+    activity: () => Response.json({ version: 1, steps: [], terminal: {} }),
     spawn: () => Response.json({ ok: true }, { status: 202 }),
     close: () => Response.json({ ok: true }, { status: 202 }),
     prompt: () => Response.json({ ok: true, queued: false }),
@@ -104,6 +106,7 @@ async function setup({ auto = false, speech = true, awake = true, confirmed = tr
       requests.push({ path, body, pid });
       if (path === '/api/state') return network.state(pid);
       if (path === '/api/sessions') return network.sessions();
+      if (path === '/api/activity') return network.activity(pid);
       if (path === '/api/session/spawn') return network.spawn(body);
       if (path === '/api/session/close') return network.close(body, pid);
       if (path === '/api/prompt') { prompts.push(body); return network.prompt(body); }
@@ -1039,4 +1042,66 @@ test('settings show the app and connected Pi versions and flag a stale backend',
   await vm.runInContext('poll()', h.context);
   assert.equal(h.el('version-hint').hidden, false);
   assert.match(h.el('version-hint').textContent, /1\.7\.0 backend/);
+});
+
+test('the working line names the current step and opens the live Activity sheet', async () => {
+  const h = await setup();
+  h.state.busy = true;
+  h.state.activity = { version: 3, step: { kind: 'tool', name: 'bash', summary: 'npm test' } };
+  await vm.runInContext('poll()', h.context);
+  assert.equal(h.el('thinking-label').textContent, 'bash · npm test');
+  h.state.activity = { version: 4, prompt: { kind: 'confirm', title: 'Allow push?' } };
+  await vm.runInContext('poll()', h.context);
+  assert.equal(h.el('thinking-label').textContent, 'Waiting for you in Termux: Allow push?');
+  assert.equal(h.el('thinking').classes.has('waiting'), true);
+  h.network.activity = () => Response.json({ version: 5, terminal: { session: 'pi-voice' }, steps: [
+    { id: 1, kind: 'tool', name: 'bash', summary: 'npm test', status: 'running', started: Date.now() - 2000, output: Array.from({ length: 20 }, (_, i) => `line ${i}`).join('\n') },
+    { id: 2, kind: 'thinking', status: 'done', started: 1, ended: 2 },
+  ] });
+  h.el('thinking').click();
+  await flush();
+  assert.equal(h.el('activity-dialog').open, true);
+  const [tool, thinking] = h.el('activity-list').children;
+  assert.equal(tool.className, 'step tool running');
+  const output = tool.children[1];
+  assert.equal(output.textContent.split('\n').length, 6, 'Collapsed output shows a live tail');
+  tool.children[0].listeners.click();
+  assert.equal(h.el('activity-list').children[0].children[1].textContent.split('\n').length, 20);
+  assert.equal(thinking.children.length, 1, 'Thinking steps never carry content');
+  h.network.activity = () => Response.json({ version: 6, terminal: {}, steps: [{ id: 3, kind: 'tool', name: 'read', summary: 'a.js', status: 'done', started: 1, ended: 2, output: 'contents' }] });
+  await vm.runInContext('pollActivity()', h.context);
+  assert.equal(h.el('activity-list').children[0].children.length, 1, 'Finished steps collapse to one line');
+});
+
+test('Open in Termux attaches the native tmux session after a one-time warning', async () => {
+  const h = await setup({ native: true });
+  h.state.terminal = { session: 'pi-voice-0a1b2c3d' };
+  await vm.runInContext('poll()', h.context);
+  h.el('open-terminal').click();
+  assert.match(h.confirmations.at(-1), /Ctrl\+B then D/);
+  assert.deepEqual(h.nativeCalls.filter((call) => call.method === 'terminal'), [{ method: 'terminal', session: 'pi-voice-0a1b2c3d' }]);
+  h.el('open-terminal').click();
+  assert.equal(h.confirmations.filter((text) => /Ctrl\+B/.test(text)).length, 1, 'The warning is shown once');
+  h.state.terminal = { session: 'pi-voice; rm -rf ~' };
+  await vm.runInContext('poll()', h.context);
+  h.el('open-terminal').click();
+  assert.equal(h.nativeCalls.at(-1).session, '', 'Unexpected names only open Termux');
+});
+
+test('old native shells and Chrome explain how to reach the terminal instead', async () => {
+  const old = await setup({ native: true, nativeTerminal: false });
+  vm.runInContext('renderActivity()', old.context);
+  assert.equal(old.el('open-terminal').disabled, true);
+  assert.match(old.el('terminal-hint').textContent, /APK 0\.1\.3/);
+  const chrome = await setup();
+  vm.runInContext('renderActivity()', chrome.context);
+  assert.equal(chrome.el('open-terminal').hidden, true);
+  assert.match(chrome.el('terminal-hint').textContent, /Switch to the Termux tab/);
+  chrome.state.terminal = { session: 'pi-voice' };
+  await vm.runInContext('poll(); renderActivity()', chrome.context);
+  await flush();
+  assert.equal(chrome.el('open-terminal-label').textContent, 'Copy Termux command');
+  chrome.el('open-terminal').click();
+  await flush();
+  assert.equal(chrome.el('open-terminal-label').textContent, 'tmux -L pi-voice-native attach -t pi-voice', 'Without a clipboard the command is shown');
 });

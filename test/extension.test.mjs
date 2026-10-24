@@ -270,3 +270,23 @@ test('a failed launch reports its reason and can be retried', async (t) => {
   await spawn();
   assert.equal(attempts, 2);
 });
+
+test('extension exposes live activity from Pi events, including for the state poll', async (t) => {
+  const h = harness();
+  await h.events.get('session_start')({ reason: 'startup' }, h.ctx);
+  t.after(() => h.events.get('session_shutdown')({ reason: 'quit' }, h.ctx));
+  const ep = await endpoint();
+  const get = async (path) => (await fetch(`${ep.origin}/api/${path}`, { headers: { Authorization: `Bearer ${ep.token}` } })).json();
+  h.events.get('agent_start')({}, h.ctx);
+  h.events.get('message_update')({ assistantMessageEvent: { type: 'thinking_delta', delta: 'secret plan' } }, h.ctx);
+  h.events.get('tool_execution_start')({ toolCallId: 'call-1', toolName: 'bash', args: { command: 'ls -la' } }, h.ctx);
+  h.events.get('tool_execution_update')({ toolCallId: 'call-1', partialResult: { content: [{ type: 'text', text: 'total 8' }] } }, h.ctx);
+  assert.deepEqual((await get('state')).activity.step, { kind: 'tool', name: 'bash', summary: 'ls -la' });
+  const activity = await get('activity');
+  assert.equal(activity.steps.at(-1).output, 'total 8');
+  assert.deepEqual(activity.terminal, {}, 'A Pi outside the native tmux server cannot be attached');
+  assert.equal(JSON.stringify(activity).includes('secret plan'), false);
+  h.events.get('tool_execution_end')({ toolCallId: 'call-1', result: { content: [] }, isError: false }, h.ctx);
+  h.events.get('agent_settled')({}, h.ctx);
+  assert.equal((await get('state')).activity.step, undefined);
+});

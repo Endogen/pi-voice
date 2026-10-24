@@ -1,7 +1,7 @@
 {
   "name": "pi-voice-termux",
   "private": true,
-  "version": "1.8.0",
+  "version": "1.9.0",
   "type": "module",
   "description": "Zero-dependency, local mobile voice and image chat interface for Pi in Termux",
   "repository": { "type": "git", "url": "https://github.com/Endogen/pi-voice.git" },

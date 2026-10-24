@@ -110,7 +110,7 @@ function forward(req, res, origin) {
 
 /** Local-only, authenticated transport. The extension owns the actual Pi session. */
 export async function createVoiceBridge({
-  token, getState, onPrompt, onAbort, onAwake, onNewSession, onSpawn, onClose, listSessions, peerOrigin,
+  token, getState, getActivity, onPrompt, onAbort, onAwake, onNewSession, onSpawn, onClose, listSessions, peerOrigin,
   pid = process.pid, speech = termuxSpeech, port = 8765,
 }) {
   if (!token || token.length < 32) throw new Error('A strong voice bridge token is required.');
@@ -169,6 +169,9 @@ export async function createVoiceBridge({
           const { messages = [], ...summary } = state;
           send(200, { ...summary, preview: messages.findLast((message) => message.role === 'user')?.text?.slice(0, 160) || '' });
         }
+      } else if (req.method === 'GET' && path === '/api/activity') {
+        if (!getActivity) throw fail(501, 'Live activity is not installed. Restart Pi after updating.');
+        send(200, getActivity());
       } else if (req.method === 'GET' && path === '/api/sessions') {
         if (!listSessions) throw fail(501, 'Session switching is not installed. Restart Pi after updating.');
         send(200, { self: pid, sessions: await listSessions() });

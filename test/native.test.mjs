@@ -118,12 +118,16 @@ test('native setup is explicit and preserves unrelated Termux properties and com
   assert.match(appended, /\nallow-external-apps=true\n$/);
 });
 
-test('native Android contract has fixed background commands, non-exported result receiver and speech-only JS bridge', async () => {
+test('native Android contract has fixed commands, non-exported result receiver and a speech/terminal-only JS bridge', async () => {
   const source = await readFile(new URL('../native/java/com/pivoice/app/MainActivity.java', import.meta.url), 'utf8');
   const manifest = await readFile(new URL('../native/AndroidManifest.xml', import.meta.url), 'utf8');
   const script = await readFile(new URL('../native/host.sh', import.meta.url), 'utf8');
   const methods = [...source.matchAll(/@JavascriptInterface public void (\w+)/g)].map((match) => match[1]);
-  assert.deepEqual(methods, ['speakText', 'stopReading', 'startSpeech', 'stopSpeech', 'abortSpeech']);
+  assert.deepEqual(methods, ['speakText', 'stopReading', 'startSpeech', 'stopSpeech', 'abortSpeech', 'openTerminal']);
+  // The page may only name a validated native tmux session; the command is fixed.
+  assert.match(source, /final String name = TerminalTarget\.session\(session\);\s+if \(name == null\) return;/);
+  assert.match(source, /command\(PREFIX \+ "\/bin\/tmux", TerminalTarget\.attachArguments\(name\), null\)/);
+  assert.match(source, /openTerminal[\s\S]*?trustedPage\(\) \|\| !resumed \|\| !web\.hasWindowFocus\(\)/);
   assert.match(manifest, /android.intent.action.TTS_SERVICE/);
   assert.match(source, /replySpeaker\.shutdown\(\)/);
   assert.match(source, /replySpeaker\.stop\(\);\s+web.onPause\(\)/);

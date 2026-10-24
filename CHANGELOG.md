@@ -1,5 +1,13 @@
 # Changelog
 
+## 1.9.0 — native APK 0.1.3 (versionCode 4)
+
+- **Live activity:** the working line names Pi's current step ("bash · npm test", "Writing the reply…", "Waiting for you in Termux"). Tapping it, or the terminal button in the reply bar, opens an **Activity** sheet: each tool call with its arguments, duration and a live output tail, plus the reply being written. Finished steps collapse to one line; tap a step for its full output (last 4000 characters). Private model reasoning is never shown, only that a thinking step happened. The log covers the current run, is bounded and lives only in the running Pi's memory.
+- **Open in Termux:** the Activity sheet opens Pi's actual terminal. In Pi Voice Native **0.1.3**, a Pi started by the native host or the New button is attached in a new Termux tab (`tmux -L pi-voice-native attach -t <session>`). The page can only name a validated session; the tmux command is fixed and runs without a shell. A one-time warning explains that Ctrl+C/Ctrl+D would stop Pi and Ctrl+B then D detaches. For other Pis the app opens Termux on its latest tab; Chrome offers to copy the attach command instead.
+- **Regression coverage:** activity log unit tests (bounds, reset, reasoning never stored), extension event wiring, frontend label/sheet/terminal tests, executable Java checks for terminal targets and an updated native bridge contract.
+
+Reopen the app for the Activity sheet. Restart Pi once (after the current response finishes) so it records activity. Install the same-key APK 0.1.3 (`npm run build:native`, then `npm run native:install`) for Open in Termux; older APKs explain the update instead.
+
 ## 1.8.0 — interface overhaul and parallel sessions
 
 - **Redesigned interface** in a shadcn/ui-style system (Tailwind gray tokens, inline icons, no new dependencies). Compact top bar with session title and status dot; icon-only New, History and Settings buttons with 44px touch targets; chat-style question bubble; icon Stop and Read aloud controls; a single composer card with attach, clear, microphone and an arrow Send button that appears when there is a draft. Status messages fade out unless they are errors. Settings use switches; History, Settings and Sessions open as bottom sheets.

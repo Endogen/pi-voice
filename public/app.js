@@ -117,7 +117,7 @@ globalThis.PiVoiceMarkdown = (() => {
 ;
 globalThis.PiVoiceImageLimits = Object.freeze({"maxCount":4,"maxImageBytes":3145728,"maxTotalBytes":8388608,"maxRequestBytes":12582912,"maxOriginalBytes":15728640,"maxEdge":2048,"maxPixels":40000000});
 ;
-globalThis.PiVoiceVersion = "1.8.0";
+globalThis.PiVoiceVersion = "1.9.0";
 ;
 // Optional Android WebView adapter. Chrome never gets a native bridge and keeps
 // its existing Web Speech / Termux:API path. Only speech methods are exposed.
@@ -292,6 +292,10 @@ let switchPending = false;
 let hostPid;
 let pollCount = 0;
 let noticeTimer;
+let activityData;
+let activitySupported = true;
+let activityPolling = false;
+const expandedSteps = new Set();
 const sessionBusy = new Map();
 const unread = new Set();
 // The native shell pads its WebView by the system bars; never pad twice.
@@ -397,12 +401,154 @@ function controls() {
   if (!listening) setText('listening', speechHint());
   const working = Boolean(connected && (state?.busy || state?.pending || sending || optimisticQuestion));
   $('thinking').hidden = !working;
-  setText('thinking-label', sending ? 'Sending…' : state?.pending ? 'Follow-up queued' : 'Pi is thinking…');
+  setText('thinking-label', activityLabel());
+  $('thinking').classList.toggle('waiting', Boolean(state?.activity?.prompt) && !sending);
+  $('thinking').classList.toggle('clickable', true);
+  $('open-activity').hidden = !connected;
   $('latest-answer').setAttribute('aria-busy', String(Boolean(working)));
   $('abort').hidden = !working;
   $('abort').disabled = !working || sending;
   renderLatest(state?.messages || []);
   readingControls();
+}
+function activityLabel() {
+  if (sending) return 'Sending…';
+  const now = state?.activity;
+  if (now?.prompt) return `Waiting for you in Termux${now.prompt.title ? `: ${now.prompt.title}` : ''}`;
+  if (state?.pending) return 'Follow-up queued';
+  const step = now?.step;
+  if (step?.kind === 'tool') return [step.name, step.summary].filter(Boolean).join(' · ');
+  if (step?.kind === 'thinking') return 'Thinking…';
+  if (step?.kind === 'text') return 'Writing the reply…';
+  return 'Pi is thinking…';
+}
+const terminalSession = () => {
+  const session = activityData?.terminal?.session || state?.terminal?.session || '';
+  return /^pi-voice(-[a-f0-9]{8})?$/.test(session) ? session : '';
+};
+function elapsed(step) {
+  const seconds = Math.max(0, ((step.ended || Date.now()) - step.started) / 1000);
+  if (seconds < 10) return `${seconds.toFixed(1)}s`;
+  if (seconds < 60) return `${Math.round(seconds)}s`;
+  return `${Math.floor(seconds / 60)}m ${String(Math.round(seconds % 60)).padStart(2, '0')}s`;
+}
+function stepElement(step) {
+  const open = expandedSteps.has(step.id);
+  const item = document.createElement('div');
+  item.className = `step ${step.kind} ${step.status}${open ? ' open' : ''}`;
+  const row = document.createElement('button');
+  row.className = 'step-row';
+  row.setAttribute('aria-expanded', String(open));
+  const icon = document.createElement('span');
+  icon.className = 'step-icon';
+  icon.textContent = step.status === 'done' ? '✓' : step.status === 'error' ? '!' : '';
+  const main = document.createElement('span');
+  main.className = 'step-main';
+  const name = document.createElement('span');
+  name.className = 'step-name';
+  name.textContent = { tool: step.name, thinking: 'Thinking', text: 'Writing the reply', prompt: 'Waiting for you in Termux' }[step.kind] || step.kind;
+  main.append(name);
+  if (step.summary) {
+    const summary = document.createElement('span');
+    summary.className = 'step-summary';
+    summary.textContent = step.summary;
+    main.append(summary);
+  }
+  const time = document.createElement('span');
+  time.className = 'step-time';
+  time.textContent = elapsed(step);
+  row.append(icon, main, time);
+  row.addEventListener('click', () => {
+    if (expandedSteps.has(step.id)) expandedSteps.delete(step.id);
+    else expandedSteps.add(step.id);
+    renderActivity();
+  });
+  item.append(row);
+  // Finished steps stay one line until tapped; running or failed ones show output.
+  if (step.kind === 'tool' && step.output && (open || step.status !== 'done')) {
+    const output = document.createElement('pre');
+    output.className = 'step-output';
+    // Collapsed: the last lines only, like a terminal's live tail.
+    output.textContent = open ? step.output : step.output.split('\n').slice(-6).join('\n');
+    item.append(output);
+  } else if (step.kind === 'text' && step.text) {
+    const text = document.createElement('div');
+    text.className = 'step-text';
+    text.textContent = step.text;
+    item.append(text);
+  }
+  return item;
+}
+function emptyActivity(text) {
+  const empty = document.createElement('p');
+  empty.className = 'activity-empty';
+  empty.textContent = text;
+  return empty;
+}
+function renderActivity() {
+  const body = $('activity-body');
+  // Follow new steps like a terminal, unless the user scrolled up to read.
+  const following = !(body.scrollHeight - body.scrollTop - body.clientHeight > 48);
+  const steps = activityData?.steps || [];
+  if (!activitySupported) $('activity-list').replaceChildren(emptyActivity('Restart Pi once to see its live activity here.'));
+  else if (!steps.length) $('activity-list').replaceChildren(emptyActivity(busyHere() ? 'Waiting for Pi’s first step…' : 'Nothing is running. The steps of Pi’s next task appear here: tools, their output and the reply being written.'));
+  else $('activity-list').replaceChildren(...steps.map(stepElement));
+  if (following) body.scrollTop = body.scrollHeight;
+  terminalControls();
+}
+function terminalControls() {
+  const session = terminalSession();
+  const bridge = window.PiVoiceAndroid;
+  const capable = typeof bridge?.openTerminal === 'function';
+  let hint;
+  if (bridge && !capable) hint = 'Update Pi Voice Native to APK 0.1.3 or newer to open Termux from here.';
+  else if (bridge && session) hint = 'Opens this Pi’s live terminal in Termux. To leave it running, press Ctrl+B then D. Ctrl+C or Ctrl+D would stop Pi.';
+  else if (bridge) hint = 'This Pi runs in a Termux tab you started, so Termux opens on its most recent tab.';
+  else if (session) hint = `Chrome cannot open Termux directly. Copy the command, open Termux and paste it. Leave with Ctrl+B then D.`;
+  else hint = 'Chrome cannot open Termux directly. Switch to the Termux tab where this Pi runs.';
+  if (!$('open-terminal').dataset.copied) setText('open-terminal-label', bridge ? 'Open in Termux' : 'Copy Termux command');
+  $('open-terminal').hidden = !bridge && !session;
+  $('open-terminal').disabled = Boolean(bridge && !capable);
+  setText('terminal-hint', hint);
+}
+function openTerminal() {
+  const session = terminalSession();
+  const bridge = window.PiVoiceAndroid;
+  if (typeof bridge?.openTerminal === 'function') {
+    if (session && storage.get('terminal-warned') !== 'true') {
+      if (!confirm('Termux will show Pi’s live terminal. Keys go straight to Pi: Ctrl+C or Ctrl+D would stop it. Press Ctrl+B then D to leave it running.')) return;
+      storage.set('terminal-warned', 'true');
+    }
+    cancelRecording();
+    playback.stop();
+    bridge.openTerminal(session);
+  } else if (!bridge && session) {
+    const command = `tmux -L pi-voice-native attach -t ${session}`;
+    const done = (label) => {
+      $('open-terminal').dataset.copied = 'true';
+      setText('open-terminal-label', label);
+      setTimeout(() => { delete $('open-terminal').dataset.copied; terminalControls(); }, 2500);
+    };
+    Promise.resolve(navigator.clipboard?.writeText(command)).then(
+      () => done(navigator.clipboard ? 'Copied' : command),
+      () => done(command));
+  }
+}
+async function pollActivity() {
+  if (activityPolling || !connected) return;
+  activityPolling = true;
+  const requested = targetPid;
+  try {
+    const next = await api('activity');
+    if (requested !== targetPid) return;
+    activitySupported = true;
+    activityData = next;
+  } catch (error) {
+    if ([404, 501].includes(error.status)) { activitySupported = false; activityData = undefined; }
+  } finally {
+    activityPolling = false;
+    if ($('activity-dialog').open) renderActivity();
+  }
 }
 function readingTarget() {
   if (!state || state.busy || state.pending || sending || optimisticQuestion || sessionStarting()) return;
@@ -579,7 +725,7 @@ function renderLatest(messages) {
     if (answerText) renderBody(pane, answerText, true, 'answer-pane ');
     else {
       pane.className = `answer-pane empty-answer${busy || questionText ? '' : ' idle-empty'}`;
-      pane.textContent = busy ? 'Working on your request…' : questionText ? 'No reply yet. Ask Pi to continue, or send your next question.' : 'Tap the microphone or type a question below.';
+      pane.textContent = busy ? 'Working on your request… Tap the line above to watch live.' : questionText ? 'No reply yet. Ask Pi to continue, or send your next question.' : 'Tap the microphone or type a question below.';
     }
     pane.dataset.content = answerText;
     pane.dataset.question = questionText;
@@ -714,6 +860,8 @@ function selectTarget(pid) {
   lastFocus = '';
   lastMessages = '';
   unread.delete(pid);
+  activityData = undefined;
+  expandedSteps.clear();
   cancelRecording();
   playback.stop();
 }
@@ -1038,11 +1186,12 @@ for (const id of ['autosend', 'engine', 'language']) {
   });
 }
 $('awake').addEventListener('change', () => { storage.set('awake', String($('awake').checked)); void syncWakeLock(); });
-for (const name of ['sessions', 'history', 'settings']) {
+for (const name of ['sessions', 'activity', 'history', 'settings']) {
   const dialog = $(`${name}-dialog`);
   $(`open-${name}`).addEventListener('click', () => {
     if (name === 'history') renderMessages(state?.messages || []);
     if (name === 'sessions') { renderSessions(); void pollSessions(); }
+    if (name === 'activity') { renderActivity(); void pollActivity(); }
     dialog.showModal();
   });
   $(`close-${name}`).addEventListener('click', () => dialog.close());
@@ -1054,12 +1203,15 @@ document.addEventListener('visibilitychange', () => {
   else { cancelRecording(); playback.stop(); }
 });
 window.addEventListener?.('pagehide', () => playback.stop());
+$('thinking').addEventListener('click', () => $('open-activity').click());
+$('open-terminal').addEventListener('click', openTerminal);
 $('sessions-new').addEventListener('click', () => { $('sessions-dialog').close(); void startNewSession(); });
 setInterval(() => {
   if (document.hidden) return;
   void poll();
   // Other sessions change less often; check them every few seconds.
   if (spawnRequest || $('sessions-dialog').open || ++pollCount % 4 === 0) void pollSessions();
+  if ($('activity-dialog').open) void pollActivity();
 }, 1500);
 setAttachments([]);
 void poll();

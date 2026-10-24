@@ -341,7 +341,7 @@ public final class MainActivity extends Activity {
     }
 
     // Intentionally no command, URL, token, filesystem or navigation methods.
-    // The only JavaScript capability is native speech on our authenticated page.
+    // JavaScript gets native speech and one fixed action: show Pi's terminal.
     public final class SpeechBridge {
         @JavascriptInterface public void speakText(String id, String text, String language) {
             if (id == null || !id.matches("[a-fA-F0-9-]{36}")) return;
@@ -378,6 +378,29 @@ public final class MainActivity extends Activity {
         }
         @JavascriptInterface public void abortSpeech(String id) {
             handler.post(() -> { if (trustedPage() && id != null && id.equals(speechId)) cancelSpeech("aborted"); });
+        }
+        @JavascriptInterface public void openTerminal(String session) {
+            final String name = TerminalTarget.session(session);
+            if (name == null) return;
+            handler.post(() -> {
+                if (!trustedPage() || !resumed || !web.hasWindowFocus()) return;
+                cancelSpeech("aborted");
+                replySpeaker.stop();
+                if (!name.isEmpty()) {
+                    // A new foreground Termux tab attached to the native tmux
+                    // session. Termux switches to it; this app then brings
+                    // Termux forward while it is still the foreground app.
+                    Intent attach = command(PREFIX + "/bin/tmux", TerminalTarget.attachArguments(name), null);
+                    attach.putExtra("com.termux.RUN_COMMAND_BACKGROUND", false);
+                    attach.putExtra("com.termux.RUN_COMMAND_SESSION_ACTION", "1");
+                    attach.putExtra("com.termux.RUN_COMMAND_COMMAND_LABEL", "Pi terminal");
+                    try { startService(attach); }
+                    catch (RuntimeException error) { Toast.makeText(MainActivity.this, "Termux could not open Pi's terminal. Check ‘Run commands in Termux’.", Toast.LENGTH_LONG).show(); return; }
+                }
+                Intent launch = getPackageManager().getLaunchIntentForPackage("com.termux");
+                if (launch == null) { Toast.makeText(MainActivity.this, "Termux is not installed.", Toast.LENGTH_SHORT).show(); return; }
+                try { startActivity(launch); } catch (RuntimeException ignored) {}
+            });
         }
     }
 

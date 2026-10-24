@@ -1,0 +1,52 @@
+import { test } from 'node:test';
+import assert from 'node:assert/strict';
+import { createActivity, summarize } from '../activity.mjs';
+
+test('activity records tools with output tails, the reply being written and prompts, never reasoning text', () => {
+  let clock = 1000;
+  const log = createActivity(() => clock);
+  log.start();
+  log.stream({ type: 'thinking_start' });
+  log.stream({ type: 'thinking_delta', delta: 'private chain of thought' });
+  log.stream({ type: 'thinking_end', content: 'private chain of thought' });
+  log.toolStart({ toolCallId: 't1', toolName: 'bash', args: { command: 'npm   test\n--watch' } });
+  assert.deepEqual(log.current().step, { kind: 'tool', name: 'bash', summary: 'npm test --watch' });
+  log.toolUpdate({ toolCallId: 't1', partialResult: { content: [{ type: 'text', text: 'x'.repeat(5000) }] } });
+  clock = 3500;
+  log.toolEnd({ toolCallId: 't1', result: { content: [{ type: 'text', text: 'ok 137 passing' }, { type: 'image', data: 'AAAA' }] }, isError: false });
+  log.stream({ type: 'text_start' });
+  log.stream({ type: 'text_delta', delta: 'Done: ' });
+  log.stream({ type: 'text_delta', delta: 'all tests pass.' });
+  assert.equal(log.current().step.kind, 'text');
+  log.promptStart({ kind: 'confirm', title: 'Allow rm?' });
+  assert.deepEqual(log.current().prompt, { kind: 'confirm', title: 'Allow rm?' });
+  log.promptEnd();
+  log.settle();
+  const { steps } = log.snapshot();
+  assert.deepEqual(steps.map((step) => [step.kind, step.status]), [['thinking', 'done'], ['tool', 'done'], ['text', 'done'], ['prompt', 'done']]);
+  assert.equal(steps[1].output, 'ok 137 passing');
+  assert.equal(steps[1].ended - steps[1].started, 2500);
+  assert.equal(steps[2].text, 'Done: all tests pass.');
+  assert.equal(JSON.stringify(log.snapshot()).includes('private chain'), false, 'Reasoning is never exposed');
+  assert.equal(JSON.stringify(log.snapshot()).includes('AAAA'), false, 'Images are not copied into the log');
+});
+
+test('activity is bounded, resets per run and marks failed tools', () => {
+  const log = createActivity();
+  log.start();
+  for (let i = 0; i < 100; i++) log.toolStart({ toolCallId: `t${i}`, toolName: 'read', args: { path: `file-${i}` } });
+  log.toolUpdate({ toolCallId: 't99', partialResult: { content: [{ type: 'text', text: 'y'.repeat(9000) }] } });
+  log.toolEnd({ toolCallId: 't99', result: {}, isError: true });
+  const { steps } = log.snapshot();
+  assert.equal(steps.length, 60);
+  assert.equal(steps.at(-1).status, 'error');
+  assert.ok(steps.at(-1).output.length <= 4001);
+  log.toolEnd({ toolCallId: 'unknown', result: {}, isError: false });
+  const version = log.snapshot().version;
+  log.start();
+  assert.deepEqual(log.snapshot().steps, []);
+  assert.ok(log.snapshot().version > version);
+  assert.equal(summarize({ count: 2, nested: { a: 1 } }), '{"count":2,"nested":{"a":1}}');
+  assert.equal(summarize({ file_path: '/x/y.js', content: 'long' }), '/x/y.js');
+  assert.equal(summarize('a'.repeat(500)).length, 200);
+});
