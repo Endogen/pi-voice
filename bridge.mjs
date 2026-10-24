@@ -178,6 +178,9 @@ export async function createVoiceBridge({
         try { send(200, { wakeLock: await onAwake(body.enabled) }); }
         catch (error) { throw fail(502, error.message); }
       } else if (req.method === 'POST' && path === '/api/abort') {
+        const body = await readJSON(req);
+        if (!body || typeof body.sessionId !== 'string' || !body.sessionId) throw fail(400, 'The current session ID is required. Refresh the app after updating.');
+        if (body.sessionId !== getState().sessionId) throw fail(409, 'The Pi session changed. Review the connected session before stopping it.');
         onAbort();
         send(200, { ok: true });
       } else if (req.method === 'POST' && path === '/api/listen/cancel') {

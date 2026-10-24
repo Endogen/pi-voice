@@ -473,7 +473,7 @@ async function poll() {
       $('autosend').checked = false;
       storage.set('autosend', 'false');
       // Do not automatically send a recording into a newly selected session.
-      if (listening) { cancelSpeech = true; recognition?.abort(); listenRequest?.abort(); }
+      cancelRecording();
       notice('Pi switched sessions. Auto-send is off. Review the connected session before sending.', true);
     } else if (!wasConnected) notice('Connected. Ready when you are.');
     checkNewSession(next);
@@ -485,7 +485,9 @@ async function poll() {
     if (error.status !== 401) wakeInitialized = false;
     if (newSessionRequest) {
       if (!checkNewSession()) notice('Reconnecting while Pi starts the new session…');
-    } else notice(error.status === 401 ? error.message : 'Pi is not reachable. Tap the Termux:Widget Pi Voice icon to start/reconnect, or run pi-voice --app in Termux. A Chrome-only shortcut cannot start Pi.', true);
+    } else notice(error.status === 401 ? error.message : nativeSpeech
+      ? 'Pi is not reachable. Tap the Pi Voice Native home-screen icon to reconnect. Your existing Pi Voice shortcut is also available as a fallback.'
+      : 'Pi is not reachable. Tap the Termux:Widget Pi Voice icon to start/reconnect, or run pi-voice --app in Termux. A Chrome-only shortcut cannot start Pi.', true);
   } finally {
     polling = false;
     controls();
@@ -522,14 +524,18 @@ async function send() {
 function appendSpeech(base, text) {
   return [base.trim(), text.trim()].filter(Boolean).join('\n');
 }
+function cancelRecording() {
+  if (!listening) return;
+  cancelSpeech = true;
+  recognition?.abort();
+  // Closing this response cancels only its own server-side recognizer. A
+  // session-global cancel could accidentally stop another tab's recording.
+  listenRequest?.abort();
+}
 async function startSpeech() {
   if (listening) {
     if (recognition) recognition.stop();
-    else {
-      cancelSpeech = true;
-      listenRequest?.abort();
-      api('listen/cancel', { method: 'POST' }).catch(() => {});
-    }
+    else cancelRecording();
     return;
   }
   if (!connected || sending || preparingImages || sessionStarting()) return;
@@ -626,8 +632,9 @@ $('draft').addEventListener('keydown', (event) => {
 });
 $('clear').addEventListener('click', () => { $('draft').value = ''; setAttachments([]); controls(); });
 $('abort').addEventListener('click', async () => {
-  if (!confirm('Stop Pi’s current task? Already completed actions cannot be undone.')) return;
-  try { await api('abort', { method: 'POST' }); optimisticQuestion = undefined; notice('Stop requested.'); await poll(); }
+  const sessionId = state?.sessionId;
+  if (!connected || !sessionId || !confirm('Stop Pi’s current task? Already completed actions cannot be undone.')) return;
+  try { await api('abort', { method: 'POST', body: { sessionId } }); optimisticQuestion = undefined; notice('Stop requested.'); await poll(); }
   catch (err) { notice(err.message, true); }
 });
 for (const id of ['autosend', 'engine', 'language']) {
@@ -649,7 +656,7 @@ for (const name of ['history', 'settings']) {
 document.addEventListener('visibilitychange', () => {
   if (!document.hidden) void poll();
   // Never auto-send a recording that was interrupted by switching apps.
-  else if (recognition && listening) { cancelSpeech = true; recognition.abort(); }
+  else cancelRecording();
 });
 setInterval(() => { if (!document.hidden) void poll(); }, 1500);
 setAttachments([]);

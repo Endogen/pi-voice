@@ -56,7 +56,7 @@ npm run native:install -- --enable
 
 This explicitly backs up/updates Termux's `allow-external-apps=true` setting and opens Android's APK installer; approve installation, then open **Pi Voice Native** and grant **Run commands in Termux**. Approve microphone access when first using Speak. **RUN_COMMAND is a broad shell permission: grant it only to trusted apps.** Cloning/building does not enable this security setting, install the APK or approve runtime permissions.
 
-The small native shell still requires Termux, the project scripts and an Android WebView provider. It cannot bypass force-stop, low-memory kills or vendor battery restrictions. Native installation/UI/permission/picker/speech behavior still needs an on-phone check; APK signing, unit tests and real background PTY integration have been verified. Keep the old icon as the tested fallback. Full details and recovery: **[native/README.md](native/README.md)**.
+The small native shell still requires Termux, the project scripts and an Android WebView provider. It cannot bypass force-stop, low-memory kills or vendor battery restrictions. Native launch and embedded chat have been confirmed on the development phone. Permission edge cases, the actual image picker/preview and Android speech still need targeted on-phone checks; APK signing, unit tests and real background PTY integration are verified. Keep the old icon as a fallback. Full details and recovery: **[native/README.md](native/README.md)**.
 
 ## Updating an existing installation
 
@@ -71,7 +71,9 @@ Do not run a newer native APK against older helper scripts; update the checkout 
 
 **For frontend changes:** refresh/reopen the Chrome page, or close and reopen the native Activity (Back out of the chat, then tap its icon). The running bridge serves the updated frontend files immediately, with `Cache-Control: no-store`.
 
-**For image attachments, the New session button and automatic wake-lock management:** restart Pi once after the current response finishes. At an empty Pi prompt press **Ctrl+D**, then run this in the **Termux shell**, in the same working directory:
+**When using the native app:** finish the current response and open Termux. If Pi was started by the native background host, attach with `tmux -L pi-voice-native attach -t pi-voice`. If the native app reused an already-running Pi, return to that original Pi terminal instead; there may be no native tmux session. At an empty Pi prompt press **Ctrl+D** to quit it (not merely detach). Then tap **Pi Voice Native** to resume the saved conversation with the updated backend; the existing Chrome shortcut remains untouched. If the APK itself changed, install the verified, same-signing-key update first with `npm run native:install`; Android asks you to approve it. APK 0.1.1 adds the image-preview request-policy fix. Do not install/restart while a response is running.
+
+**For the Chrome launcher / image attachments, the New session button and automatic wake-lock management:** restart Pi once after the current response finishes. At an empty Pi prompt press **Ctrl+D**, then run this in the **Termux shell**, in the same working directory:
 
 ```sh
 pi-voice --new -c
@@ -160,7 +162,7 @@ The app polls every 1.5 seconds while visible. Replies render safe Markdown: hea
 
 **New** creates a real, empty Pi session in the same process/working directory; it is not a model prompt and does not launch another Pi process. It is disabled while Pi is working, follow-ups are queued, a message is sending, speech is recording, or images are being prepared: wait, or use Stop Pi first. Repeated taps are guarded, session IDs prevent stale tabs/retries from switching another session, and the bridge keeps its port/token across replacement so the same browser tab reconnects. Auto-send turns off for the new session; the saved stay-awake preference is reapplied. Cancelling/failure keeps the draft. If acknowledgement is lost, the browser watches for the new session instead of automatically repeating the action.
 
-**Stop Pi** requests cancellation; it cannot undo completed actions. A failed HTTP submission keeps the draft. Retries of the same message are deduplicated while that bridge runs; after restarting Pi, check the conversation before retrying an unconfirmed submission.
+**Stop Pi** requests cancellation for the session shown in the app; an old tab cannot stop a different session after a switch. It cannot undo completed actions. A failed HTTP submission keeps the draft. Retries of the same message are deduplicated while that bridge runs; after restarting Pi, check the conversation before retrying an unconfirmed submission.
 
 ## Privacy and security
 
@@ -223,6 +225,7 @@ npm run build          # Required after changing src/ JavaScript
 npm test               # Bundle freshness + automated unit/HTTP/UI simulation tests
 npm run test:integration
 npm run test:native    # Isolated real Pi inside a background tmux PTY
+npm run test:native:policy # Executable Java WebView request-policy checks; requires JDK
 npm run build:native   # Optional APK; needs native tools/platform jar (native/README.md)
 npm run native:setup   # Show external-command setting without changing it
 ```
@@ -231,4 +234,4 @@ The integration smoke test starts the installed Pi in an isolated temporary RPC 
 
 The native PTY integration separately verifies a real Pi cold start, authenticated discovery, repeated-launch reuse, New session in normal TUI mode, stable URL and clean host exit. It uses a unique tmux server and temporary state, without Chrome, provider calls, real wake-lock changes or user-session changes. The APK builder checks signature and zip alignment.
 
-**Validation limits:** speech-to-Pi and the improved pinned icon have been confirmed during development. Automated tests validate browser logic/Markdown HTML, HTTP behavior and installed Pi integration. This Termux environment has no headless browser or adb/UI automation, so there is no pixel-level Chrome/WebView screenshot test. Image preparation is exercised with mocked decoding/canvas APIs; actual Android picker/canvas and real-model vision quality still need an on-phone check. The native APK has been built/signed but not installed/tested through Android's runtime permission/RUN_COMMAND result flow. Native microphone recognition, keyboard/layout, repeated icon taps, process death and sustained vendor background survival need a device check. The native installer helper opens Android's approval UI only when explicitly requested; it does not approve installation or runtime permissions.
+**Validation limits:** speech-to-Pi and the improved pinned icon have been confirmed during development. Automated tests validate browser logic/Markdown HTML, HTTP behavior and installed Pi integration. This Termux environment has no headless browser or adb/UI automation, so there is no pixel-level Chrome/WebView screenshot test. Image preparation is exercised with mocked decoding/canvas APIs; actual Android picker/canvas and real-model vision quality still need an on-phone check. The native launch/RUN_COMMAND connection and embedded chat are user-confirmed on the development phone. The updated image-request boundary has executable Java regression checks; its actual picker/thumbnail display still needs checking in the updated APK. Native microphone recognition, permission edge cases, keyboard/layout, repeated icon taps, process death and sustained vendor background survival need targeted device checks. The native installer helper opens Android's approval UI only when explicitly requested; it does not approve installation or runtime permissions.

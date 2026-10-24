@@ -181,7 +181,20 @@ test('validates transcript, message IDs and the exact target session', async (t)
   }
   assert.equal((await request('/api/prompt', prompt({ sessionId: 'old-session' }))).status, 409);
   assert.deepEqual(prompts, []);
-  assert.equal((await request('/api/abort', {})).status, 200);
+  assert.equal((await request('/api/abort', { sessionId: 'session-1' })).status, 200);
+});
+
+test('Stop Pi rejects stale or missing session IDs without aborting another conversation', async (t) => {
+  let sessionId = 'session-1';
+  const h = await setup(t, { getState: () => ({ sessionId, busy: true }) });
+  for (const body of [{}, null, { sessionId: 123 }]) {
+    assert.equal((await h.request('/api/abort', body)).status, 400);
+  }
+  sessionId = 'session-2';
+  assert.equal((await h.request('/api/abort', { sessionId: 'session-1' })).status, 409);
+  assert.equal(h.aborted(), 0, 'Stale controls must have no effect');
+  assert.equal((await h.request('/api/abort', { sessionId })).status, 200);
+  assert.equal(h.aborted(), 1);
 });
 
 test('malformed JSON and wrong media types do not reach Pi', async (t) => {
@@ -232,6 +245,29 @@ test('speech is single-flight, cancellable and releases the listening lock', asy
   assert.equal((await request('/api/listen/cancel', {})).status, 200);
   assert.equal((await first).status, 409);
   assert.equal((await (await request('/api/state')).json()).listening, false);
+});
+
+test('closing a speech response cancels only its own recognizer, not another tab’s rejected request', { timeout: 5000 }, async (t) => {
+  let started, stopped, cancelled = false;
+  const ready = new Promise((resolve) => { started = resolve; });
+  const closed = new Promise((resolve) => { stopped = resolve; });
+  const h = await setup(t, { speech: ({ signal }) => new Promise((_resolve, reject) => {
+    signal.addEventListener('abort', () => { cancelled = true; stopped(); reject(Object.assign(new Error('Cancelled'), { status: 409 })); }, { once: true });
+    started();
+  }) });
+  const headers = { Authorization: `Bearer ${token}` };
+  const owner = new AbortController();
+  const pending = fetch(`${h.bridge.origin}/api/listen`, { method: 'POST', headers, signal: owner.signal }).catch((error) => error);
+  await ready;
+  const other = new AbortController();
+  const rejected = await fetch(`${h.bridge.origin}/api/listen`, { method: 'POST', headers, signal: other.signal });
+  assert.equal(rejected.status, 409);
+  other.abort();
+  assert.equal(cancelled, false);
+  owner.abort();
+  await closed;
+  assert.equal((await pending).name, 'AbortError');
+  assert.deepEqual(h.prompts, []);
 });
 
 test('speech errors are reported and do not submit a prompt', async (t) => {

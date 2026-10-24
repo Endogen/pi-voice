@@ -90,7 +90,10 @@ try {
   assert.equal((await fetch(`${endpoint.origin}/api/state`, { headers: {
     Authorization: `Bearer ${endpoint.token}`, 'Sec-Fetch-Site': 'cross-site',
   } })).status, 403, 'External launch exception must not apply to the API');
-  const abort = await fetch(`${endpoint.origin}/api/abort`, { method: 'POST', headers: { Authorization: `Bearer ${endpoint.token}` } });
+  const abort = await fetch(`${endpoint.origin}/api/abort`, {
+    method: 'POST', headers: { Authorization: `Bearer ${endpoint.token}`, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ sessionId: state.sessionId }),
+  });
   assert.equal(abort.status, 200);
   // Exercise the browser's control route, not RPC new_session: this must run a
   // real command context and survive destruction/recreation of the extension.
@@ -128,6 +131,11 @@ try {
       body: JSON.stringify({ id: 'stale-session-req', sessionId: previous.sessionId }),
     });
     assert.equal(stale.status, 409, 'An old tab/retry must not create another session');
+    const staleStop = await fetch(`${endpoint.origin}/api/abort`, {
+      method: 'POST', headers: { Authorization: `Bearer ${endpoint.token}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ sessionId: previous.sessionId }),
+    });
+    assert.equal(staleStop.status, 409, 'An old tab must not stop the new session');
     previous = next;
   }
   // Exercise the native sendUserMessage structured-content path. The separate

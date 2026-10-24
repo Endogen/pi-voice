@@ -53,6 +53,10 @@ try {
   }
   assert.ok(next?.sessionId && next.sessionId !== state.sessionId, 'New session must also work in an actual TUI PTY');
   assert.equal((await discoverConnections(options.directory))[0].url, connection.url, 'Session replacement must keep the connection');
+  const staleStop = await fetch(`${url.origin}/api/abort`, {
+    method: 'POST', headers, body: JSON.stringify({ sessionId: state.sessionId }),
+  });
+  assert.equal(staleStop.status, 409, 'An old native view must not abort the new TUI session');
   await exec(tmux, ['-L', socket, 'send-keys', '-t', '=pi-voice:0.0', 'C-d']);
   await Promise.race([host, delay(10000).then(() => { throw new Error('Native host did not exit with its Pi PTY'); })]);
   if (hostFailure) throw hostFailure;

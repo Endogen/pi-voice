@@ -7,8 +7,8 @@ import { stateDir } from '../extension.mjs';
 // records on transient network errors (another launcher may still need them).
 export async function discoverConnections(directory = stateDir) {
   const endpoints = join(directory, 'endpoints');
-  const names = await readdir(endpoints).catch(() => []);
-  const results = await Promise.all(names.filter((name) => /^\d+\.json$/.test(name)).map(async (name) => {
+  const names = (await readdir(endpoints).catch(() => [])).filter((name) => /^\d+\.json$/.test(name));
+  const probe = async (name) => {
     try {
       const endpoint = JSON.parse(await readFile(join(endpoints, name), 'utf8'));
       if (endpoint.pid !== Number(name.slice(0, -5)) || !/^[a-f0-9]{64}$/.test(endpoint.token)) return;
@@ -21,8 +21,19 @@ export async function discoverConnections(directory = stateDir) {
       if (!response.ok) return;
       const state = await response.json();
       if (state.pid !== endpoint.pid || typeof state.sessionId !== 'string' || !state.sessionId) return;
-      return { pid: state.pid, sessionId: state.sessionId, url: `${origin.origin}/#${endpoint.token}` };
+      return { pid: state.pid, sessionId: state.sessionId, cwd: typeof state.cwd === 'string' ? state.cwd : '', url: `${origin.origin}/#${endpoint.token}` };
     } catch { /* Stale PID, partially written record, or temporarily unavailable. */ }
+  };
+  // A bridge caps connections at 24. Probing every stale record in parallel
+  // can exhaust that cap, hide a live Pi and incorrectly trigger cold startup.
+  // Keep capacity for the chat, other launchers and the bootstrap poller.
+  const results = new Array(names.length);
+  let cursor = 0;
+  await Promise.all(Array.from({ length: Math.min(4, names.length) }, async () => {
+    while (cursor < names.length) {
+      const index = cursor++;
+      results[index] = await probe(names[index]);
+    }
   }));
   return results.filter(Boolean);
 }

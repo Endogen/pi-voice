@@ -1,4 +1,5 @@
 import { test } from 'node:test';
+import http from 'node:http';
 import assert from 'node:assert/strict';
 import { mkdtemp, mkdir, readFile, writeFile, rm, readdir } from 'node:fs/promises';
 import { execFile } from 'node:child_process';
@@ -34,10 +35,16 @@ test('launcher opens current session, rejects stale PID files and refuses ambigu
   const result = await exec(process.execPath, [launcher], { env, timeout: 10000 });
   assert.match(result.stdout, /current-.*\/current\/project/);
   assert.deepEqual(JSON.parse(await readFile(opened, 'utf8')), [bridge.url, 'com.android.chrome']);
-  assert.deepEqual(await readdir(endpoints), ['1234.json']);
+  assert.deepEqual((await readdir(endpoints)).sort(), ['1234.json', '9999.json'], 'Discovery must not delete files owned by a running extension');
   const appResult = await exec(process.execPath, [launcher, '--app'], { env, timeout: 10000 });
   assert.match(appResult.stdout, /Opening Pi Voice for current-/);
   assert.doesNotMatch(appResult.stdout, /resuming Pi/);
+  const unavailable = http.createServer((_req, res) => { res.writeHead(503); res.end('Temporarily busy'); });
+  await new Promise((resolve) => unavailable.listen(0, '127.0.0.1', resolve));
+  t.after(() => { unavailable.closeAllConnections(); unavailable.close(); });
+  await writeFile(join(endpoints, '7777.json'), JSON.stringify({ pid: 7777, token, origin: `http://127.0.0.1:${unavailable.address().port}` }));
+  await exec(process.execPath, [launcher], { env, timeout: 10000 });
+  assert.ok((await readdir(endpoints)).includes('7777.json'), 'A transient 503 must not permanently lose a live session endpoint');
   const second = await createVoiceBridge({ ...options, getState: () => ({ pid: 5678, sessionId: 'second-session', cwd: '/other' }) });
   t.after(() => second.close());
   await writeFile(join(endpoints, '5678.json'), JSON.stringify({ pid: 5678, token, origin: second.origin, url: second.url }));

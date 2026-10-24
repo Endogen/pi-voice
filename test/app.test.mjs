@@ -55,6 +55,7 @@ async function setup({ auto = false, speech = true, awake = true, confirmed = tr
     state: () => Response.json(state),
     prompt: () => Response.json({ ok: true, queued: false }),
     newSession: () => Response.json({ ok: true }, { status: 202 }),
+    listen: () => Response.json({ text: 'fallback transcript' }),
     awake: (body) => { state.wakeLock = { active: body.enabled }; return Response.json({ wakeLock: state.wakeLock }); },
   };
   class Speech {
@@ -91,6 +92,8 @@ async function setup({ auto = false, speech = true, awake = true, confirmed = tr
       if (path === '/api/prompt') { prompts.push(body); return network.prompt(body); }
       if (path === '/api/session/new') return network.newSession(body);
       if (path === '/api/awake') return network.awake(body);
+      if (path === '/api/listen') return network.listen(options.signal);
+      if (path === '/api/listen/cancel') return Response.json({ ok: true });
       if (path === '/api/abort') { state.busy = false; return Response.json({ ok: true }); }
       throw new Error(`Unexpected API call: ${path}`);
     },
@@ -483,6 +486,41 @@ test('backgrounding browser speech cancels without sending', async () => {
   h.document.listeners.visibilitychange();
   await flush();
   assert.equal(h.prompts.length, 0);
+});
+
+test('backgrounding Termux fallback aborts recording and never auto-sends a late result', async () => {
+  const h = await setup({ auto: true, speech: false });
+  h.el('engine').value = 'termux';
+  h.el('draft').value = 'keep this draft';
+  let complete, signal;
+  h.network.listen = (requestSignal) => { signal = requestSignal; return new Promise((resolve) => { complete = resolve; }); };
+  const recording = vm.runInContext('startSpeech()', h.context);
+  h.document.hidden = true;
+  h.document.listeners.visibilitychange();
+  // Simulate a final HTTP result already in flight when cancellation occurs.
+  complete(Response.json({ text: 'do not send this while hidden' }));
+  await recording;
+  assert.equal(h.prompts.length, 0);
+  assert.equal(signal.aborted, true);
+  assert.equal(h.requests.filter((r) => r.path === '/api/listen/cancel').length, 0, 'Cancel only this request, never another tab’s recognizer');
+  assert.equal(h.el('draft').value, 'keep this draft');
+  assert.match(h.el('notice').textContent, /cancelled/);
+});
+
+test('native reconnect errors point to the native icon, not a Chrome-only workflow', async () => {
+  const h = await setup({ native: true });
+  h.network.state = () => { throw new Error('Server stopped'); };
+  await vm.runInContext('poll()', h.context);
+  assert.match(h.el('notice').textContent, /Pi Voice Native/);
+});
+
+test('Stop Pi sends the displayed session ID rather than a sessionless abort', async () => {
+  const h = await setup();
+  h.state.busy = true;
+  await vm.runInContext('poll()', h.context);
+  await h.el('abort').click();
+  const request = h.requests.find((r) => r.path === '/api/abort');
+  assert.deepEqual(request.body, { sessionId: 'session-one' });
 });
 
 test('shows newest messages first without mutating session order or forcing scroll', async () => {

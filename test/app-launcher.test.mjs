@@ -74,7 +74,7 @@ setTimeout(() => server.listen(0, '127.0.0.1', () => {
   assert.match(result.stdout, /already starting/);
   assert.match(result.stdout, /Opening Pi Voice for resumed-/);
   assert.equal((await readFile(env.STARTED, 'utf8')).trim().split('\n').length, 1);
-  assert.match(JSON.parse(await readFile(env.OPENED, 'utf8'))[0], /^http:\/\/127\.0\.0\.1:\d+\/#token=/);
+  assert.match(JSON.parse(await readFile(env.OPENED, 'utf8'))[0], /^http:\/\/127\.0\.0\.1:\d+\/#[a-f0-9]{64}$/);
 });
 
 test('failed app startup reports failure and releases its kernel lock for a retry', async (t) => {

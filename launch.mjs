@@ -1,9 +1,10 @@
 #!/usr/bin/env node
-import { readdir, readFile, unlink, mkdir, open } from 'node:fs/promises';
+import { mkdir, open } from 'node:fs/promises';
 import { join } from 'node:path';
 import { spawn } from 'node:child_process';
 import { setTimeout as delay } from 'node:timers/promises';
 import { stateDir, openBrowser } from './extension.mjs';
+import { discoverConnections as discover } from './native/connection.mjs';
 
 const args = process.argv.slice(2);
 if (args.includes('--help') || args.includes('-h')) {
@@ -42,31 +43,6 @@ const appMode = args.includes('--app');
 if (appMode && args.length !== 1) {
   console.error('Use pi-voice --app by itself, or --new [pi args] for a separate session.');
   process.exit(1);
-}
-
-async function discover() {
-  const directory = join(stateDir, 'endpoints');
-  const names = await readdir(directory).catch(() => []);
-  const live = [];
-  for (const name of names.filter((name) => /^\d+\.json$/.test(name))) {
-    const path = join(directory, name);
-    try {
-      const endpoint = JSON.parse(await readFile(path, 'utf8'));
-      if (!/^http:\/\/127\.0\.0\.1:\d+$/.test(endpoint.origin)) continue;
-      const response = await fetch(`${endpoint.origin}/api/state`, {
-        headers: { Authorization: `Bearer ${endpoint.token}` }, signal: AbortSignal.timeout(1500),
-      });
-      if (!response.ok) throw new Error('Bridge unavailable');
-      const state = await response.json();
-      if (state.pid !== endpoint.pid) throw new Error('Stale discovery file');
-      // /new and session navigation can change the session without changing the bridge.
-      live.push({ ...endpoint, sessionId: state.sessionId, cwd: state.cwd });
-    } catch (error) {
-      // A concurrent startup may still be writing JSON. Do not erase that file.
-      if (!(error instanceof SyntaxError)) await unlink(path).catch(() => {});
-    }
-  }
-  return live;
 }
 
 // Returns false only when there is no running bridge. Ambiguity must never

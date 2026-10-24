@@ -272,7 +272,7 @@ public final class MainActivity extends Activity {
             return true;
         }
         @Override public WebResourceResponse shouldInterceptRequest(WebView view, WebResourceRequest request) {
-            if (trusted(request.getUrl())) return null;
+            if (RequestPolicy.allows(origin, request.getUrl().toString(), request.isForMainFrame())) return null;
             return new WebResourceResponse("text/plain", "UTF-8", 403, "Forbidden", Collections.emptyMap(), new ByteArrayInputStream(new byte[0]));
         }
         @Override public void onPageFinished(WebView view, String url) {

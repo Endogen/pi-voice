@@ -66,7 +66,9 @@ test('extension connects the existing session, queues speech, exposes replies an
   const next = await (await request('state')).json();
   assert.equal(next.messages.at(-1).text, 'Here is the reply');
   assert.equal(JSON.stringify(next).includes('secret thought'), false);
-  await request('abort', {});
+  assert.equal((await request('abort', { sessionId: 'old-session' })).status, 409);
+  assert.equal(h.aborts(), 0);
+  await request('abort', { sessionId: state.sessionId });
   assert.equal(h.aborts(), 1);
   await h.events.get('session_shutdown')({ reason: 'reload' }, h.ctx);
   assert.deepEqual(await readdir(join(stateDir, 'endpoints')), []);

@@ -27,7 +27,7 @@ async function fixture(t, handler) {
   const endpoint = { pid: 4567, origin, token, url: 'https://example.invalid/do-not-use' };
   const path = join(directory, 'endpoints', '4567.json');
   await writeFile(path, JSON.stringify(endpoint), { mode: 0o600 });
-  return { directory, endpoint, path, origin, token, calls: () => calls };
+  return { directory, endpoint, path, origin, token, server, calls: () => calls };
 }
 
 test('native discovery authenticates, checks PID and reconstructs URL instead of trusting discovery URL', async (t) => {
@@ -37,6 +37,21 @@ test('native discovery authenticates, checks PID and reconstructs URL instead of
   assert.equal(connections[0].url, `${h.origin}/#${h.token}`);
   assert.equal(chooseConnection(connections).sessionId, 'native-session');
   assert.equal((await waitForConnection({ directory: h.directory, timeout: 50 })).pid, 4567);
+});
+
+test('discovery limits concurrent probes so stale records cannot exhaust the bridge connection cap', async (t) => {
+  const h = await fixture(t, (_req, res) => setTimeout(() => {
+    res.setHeader('Content-Type', 'application/json');
+    res.end(JSON.stringify({ pid: 4567, sessionId: 'native-session' }));
+  }, 75));
+  h.server.maxConnections = 24; // Same cap as the actual Pi bridge.
+  await Promise.all(Array.from({ length: 40 }, (_, i) => {
+    const pid = 4000 + i;
+    return writeFile(join(h.directory, 'endpoints', `${pid}.json`), JSON.stringify({ ...h.endpoint, pid }));
+  }));
+  const connections = await discoverConnections(h.directory);
+  assert.equal(connections.length, 1, 'A pile of stale records must not hide the live Pi and cause duplicate startup');
+  assert.equal(connections[0].pid, 4567);
 });
 
 test('native discovery rejects malformed, non-loopback and mismatched records without deleting them', async (t) => {
@@ -97,6 +112,7 @@ test('native Android contract has fixed background commands, non-exported result
   assert.match(source, /setWebContentsDebuggingEnabled\(false\)/);
   assert.match(source, /setAllowFileAccess\(false\)/);
   assert.match(source, /onShowFileChooser/);
+  assert.match(source, /RequestPolicy\.allows\(origin, request\.getUrl\(\)\.toString\(\), request\.isForMainFrame\(\)\)/, 'Use the executable, tested request boundary for JPEG previews');
   assert.match(source, /onJsConfirm/);
   assert.match(source, /JSONObject.quote\(text/);
   assert.match(manifest, /receiver android:name=".ResultReceiver" android:exported="false"/);

@@ -1,7 +1,7 @@
 {
   "name": "pi-voice-termux",
   "private": true,
-  "version": "1.6.0",
+  "version": "1.6.1",
   "type": "module",
   "description": "Zero-dependency, local mobile voice and image chat interface for Pi in Termux",
   "repository": { "type": "git", "url": "https://github.com/Endogen/pi-voice.git" },
@@ -15,6 +15,7 @@
     "test:integration": "node test/integration.mjs",
     "build:native": "node build.mjs && node native/build.mjs",
     "test:native": "node native/integration.mjs",
+    "test:native:policy": "node native/test-policy.mjs",
     "native:setup": "node native/setup.mjs",
     "native:install": "node native/setup.mjs --install"
   },
