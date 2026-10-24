@@ -104,6 +104,7 @@
         <p class="hint">Prevents CPU sleep, not Android force-closing. Uses more battery. In Android, set Termux battery use to <strong>Unrestricted</strong> / allow background activity. The display may still sleep. Termux’s wake lock is shared across its sessions.</p>
       </section>
       <section class="settings-section session" aria-label="Connected session"><h3>Connected Pi</h3><strong id="session">No session connected</strong><small id="directory"></small><small id="model"></small></section>
+      <section class="settings-section" aria-label="Versions"><h3>About</h3><dl class="about"><div><dt>Pi Voice</dt><dd id="voice-version">—</dd></div><div><dt>Pi</dt><dd id="pi-version">—</dd></div></dl><p id="version-hint" class="hint" hidden></p></section>
       <section class="settings-section"><h3>Home-screen app</h3><p id="home-launch-hint" class="hint">For one-tap startup, install Termux:Widget from the same source as Termux, then add its <strong>Pi Voice</strong> home-screen shortcut. It starts/resumes Pi and opens Chrome. A Chrome-only shortcut needs Pi already running.</p><p class="hint">Replies appear after each message completes; the working indicator stays visible during generation/tools. Reconnect: <code>pi-voice --app</code> in Termux or <code>/voice</code> in Pi. Stop bridge: <code>/voice stop</code>. Phone-only connection; no public server.</p></section>
     </div>
   </dialog>

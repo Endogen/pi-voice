@@ -117,6 +117,8 @@ globalThis.PiVoiceMarkdown = (() => {
 ;
 globalThis.PiVoiceImageLimits = Object.freeze({"maxCount":4,"maxImageBytes":3145728,"maxTotalBytes":8388608,"maxRequestBytes":12582912,"maxOriginalBytes":15728640,"maxEdge":2048,"maxPixels":40000000});
 ;
+globalThis.PiVoiceVersion = "1.8.0";
+;
 // Optional Android WebView adapter. Chrome never gets a native bridge and keeps
 // its existing Web Speech / Termux:API path. Only speech methods are exposed.
 (function () {
@@ -354,6 +356,15 @@ function header() {
   $('sessions-badge').classList.toggle('unread', fresh);
   $('open-sessions').setAttribute('aria-label', `Switch session (${sessions.length || 1} running${fresh ? ', new reply' : ''})`);
 }
+function versions() {
+  const page = globalThis.PiVoiceVersion || 'Unknown';
+  setText('voice-version', page);
+  // Versions describe the connected Pi; backends before 1.8.0 report none.
+  setText('pi-version', state?.piVersion || (!state ? '—' : state.voiceVersion ? 'Unknown' : 'Restart Pi to show'));
+  const backend = state?.voiceVersion;
+  $('version-hint').hidden = !backend || backend === page;
+  if (backend && backend !== page) setText('version-hint', `This Pi still runs the Pi Voice ${backend} backend. Restart Pi after its current task to finish updating.`);
+}
 function controls() {
   const switching = sessionStarting() || Boolean(spawnRequest) || switchPending;
   $('new-session').disabled = !connected || switching || sending || listening || preparingImages;
@@ -367,6 +378,7 @@ function controls() {
   $('listening').classList.toggle('subtle', !listening && !attachments.length && !$('autosend').checked);
   $('listening').classList.toggle('live', listening);
   header();
+  versions();
   $('send').disabled = switching || !connected || sending || listening || preparingImages || (!$('draft').value.trim() && !attachments.length);
   $('attach').disabled = switching || !connected || sending || listening || preparingImages;
   $('image-input').disabled = $('attach').disabled;

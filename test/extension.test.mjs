@@ -243,6 +243,7 @@ test('parallel sessions are launched once per request, listed without credential
   });
   const state = await (await request('state')).json();
   assert.deepEqual([state.title, state.spawned], ['Test session', false]);
+  assert.equal(state.voiceVersion, JSON.parse(await readFile(new URL('../package.json', import.meta.url), 'utf8')).version);
   assert.equal((await request('session/spawn', { id: 'spawn-request-1' })).status, 202);
   assert.equal((await request('session/spawn', { id: 'spawn-request-1' })).status, 202);
   assert.deepEqual(launched, [{ id: 'spawn-request-1', cwd: '/test/project' }], 'A retried request does not start a second Pi');

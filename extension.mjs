@@ -1,7 +1,7 @@
 import { randomBytes } from 'node:crypto';
-import { access, mkdir, readFile, writeFile, chmod, unlink } from 'node:fs/promises';
+import { access, mkdir, readFile, realpath, writeFile, chmod, unlink } from 'node:fs/promises';
 import { homedir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import { execFile } from 'node:child_process';
 import { createVoiceBridge } from './bridge.mjs';
 import { createWakeLock } from './wake-lock.mjs';
@@ -36,6 +36,26 @@ export function openBrowser(url) {
   });
 }
 
+const readVersion = async (file) => {
+  const data = JSON.parse(await readFile(file, 'utf8'));
+  return typeof data.version === 'string' ? { name: data.name, version: data.version.slice(0, 40) } : {};
+};
+
+// Versions shown in Settings. Pi's extension API has no version field: find
+// Pi's package.json above the running CLI, else ask its (aliased) package.
+export async function detectVersions(cli = process.argv[1]) {
+  const voice = await readVersion(new URL('./package.json', import.meta.url)).then((data) => data.version, () => undefined);
+  let pi;
+  try {
+    for (let directory = dirname(await realpath(cli)), i = 0; i < 6 && !pi; directory = dirname(directory), i++) {
+      const data = await readVersion(join(directory, 'package.json')).catch(() => ({}));
+      if (/pi-coding-agent$/.test(data.name || '')) pi = data.version;
+    }
+  } catch { /* No CLI path, e.g. a compiled binary. */ }
+  if (!pi) pi = await import('@earendil-works/pi-coding-agent').then((module) => String(module.VERSION || '') || undefined, () => undefined);
+  return { voice, pi };
+}
+
 const maxSessions = 4;
 const spawnId = /^[a-zA-Z0-9-]{8,80}$/.test(process.env.PI_VOICE_SPAWN_ID || '') ? process.env.PI_VOICE_SPAWN_ID : undefined;
 const fail = (status, message) => Object.assign(new Error(message), { status });
@@ -64,6 +84,8 @@ function textOf(message) {
 export default function installVoiceExtension(pi, { wakeLock = createWakeLock({ directory: join(stateDir, 'wake-lock') }), launch = launchSession } = {}) {
   let bridge;
   const spawned = new Set();
+  let versions = {};
+  void detectVersions().then((found) => { versions = found; }, () => {});
   let context;
   let starting;
   let newSessionAction;
@@ -83,6 +105,8 @@ export default function installVoiceExtension(pi, { wakeLock = createWakeLock({ 
       sessionName: context.sessionManager.getSessionName() || 'Pi session',
       title: context.sessionManager.getSessionName() || firstQuestion() || 'New session',
       spawned: Boolean(spawnId),
+      voiceVersion: versions.voice,
+      piVersion: versions.pi,
       spawnId,
       sessionPersistent: Boolean(context.sessionManager.getSessionFile()),
       cwd: context.cwd,

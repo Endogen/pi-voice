@@ -152,6 +152,10 @@ select, input[type=text] { width: 100%; min-height: 44px; padding: 0 12px; borde
 select:focus, input[type=text]:focus { outline: 0; border-color: var(--accent); box-shadow: 0 0 0 3px rgb(147 180 255 / .15); }
 .session strong { display: block; font-size: .92rem; }
 .session small { display: block; color: var(--muted); font-size: .8rem; overflow-wrap: anywhere; margin-top: 4px; }
+.about { margin: 0; }
+.about div { display: flex; justify-content: space-between; gap: 16px; padding: 7px 0; font-size: .92rem; }
+.about dt { color: var(--muted); }
+.about dd { margin: 0; font-variant-numeric: tabular-nums; text-align: right; overflow-wrap: anywhere; }
 code { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: .86em; padding: .1em .35em; border-radius: 6px; background: var(--bg); }
 
 /* History */

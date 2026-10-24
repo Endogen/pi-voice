@@ -1025,3 +1025,18 @@ test('older backend stay-awake error explains a restart without breaking the con
   assert.match(h.el('wake-status').textContent, /Restart Pi once/);
   assert.equal(h.el('connection').textContent, 'Ready · project');
 });
+
+test('settings show the app and connected Pi versions and flag a stale backend', async () => {
+  const h = await setup();
+  assert.equal(h.el('voice-version').textContent, JSON.parse(await readFile(new URL('../package.json', import.meta.url), 'utf8')).version);
+  assert.equal(h.el('pi-version').textContent, 'Restart Pi to show', 'Older backends report no versions');
+  h.state.voiceVersion = h.el('voice-version').textContent;
+  h.state.piVersion = '1.4.0';
+  await vm.runInContext('poll()', h.context);
+  assert.equal(h.el('pi-version').textContent, '1.4.0');
+  assert.equal(h.el('version-hint').hidden, true);
+  h.state.voiceVersion = '1.7.0';
+  await vm.runInContext('poll()', h.context);
+  assert.equal(h.el('version-hint').hidden, false);
+  assert.match(h.el('version-hint').textContent, /1\.7\.0 backend/);
+});
