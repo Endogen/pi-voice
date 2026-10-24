@@ -1023,6 +1023,71 @@ document.addEventListener('visibilitychange', () => {
   else { cancelRecording(); playback.stop(); }
 });
 window.addEventListener?.('pagehide', () => playback.stop());
+// Pull down on the conversation (scrolled to the top) to re-sync with Pi, or
+// to restart it when it has stopped. Built in the page: the native shell has
+// no AndroidX swipe-refresh widget, and Chrome's own is unavailable here.
+const pullThreshold = 64;
+const pull = { start: undefined, distance: 0, active: false };
+let refreshing = false;
+const sheetOpen = () => ['sessions', 'activity', 'history', 'settings'].some((name) => $(`${name}-dialog`).open);
+const atTop = () => !($('latest-answer').scrollTop > 0) && !($('latest-question').scrollTop > 0);
+function showPull(distance, settle = false) {
+  const indicator = $('pull-indicator');
+  indicator.classList.toggle('settle', settle);
+  indicator.classList.toggle('ready', distance >= pullThreshold);
+  // CSSOM, not a style attribute: the page's CSP blocks inline styles.
+  indicator.style?.setProperty('--pull', `${distance}px`);
+  indicator.style?.setProperty('--pull-opacity', String(Math.min(1, distance / pullThreshold)));
+  indicator.style?.setProperty('--pull-turn', `${distance * 4}deg`);
+}
+async function refresh() {
+  if (refreshing) return;
+  if (!connected && canReconnect()) { showPull(0, true); reconnect(); return; }
+  refreshing = true;
+  showPull(52, true);
+  $('pull-indicator').classList.toggle('refreshing', true);
+  const shown = new Promise((resolve) => setTimeout(resolve, 500));
+  try {
+    await poll();
+    await Promise.all([pollSessions(), $('activity-dialog').open ? pollActivity() : undefined, shown]);
+  } finally {
+    refreshing = false;
+    $('pull-indicator').classList.toggle('refreshing', false);
+    showPull(0, true);
+  }
+}
+$('exchange').addEventListener('touchstart', (event) => {
+  pull.start = undefined;
+  if (event.touches.length !== 1 || refreshing || sheetOpen() || !atTop()) return;
+  pull.start = { x: event.touches[0].clientX, y: event.touches[0].clientY };
+  pull.distance = 0;
+  pull.active = false;
+}, { passive: true });
+$('exchange').addEventListener('touchmove', (event) => {
+  if (!pull.start || event.touches.length !== 1) return;
+  const dx = event.touches[0].clientX - pull.start.x;
+  const dy = event.touches[0].clientY - pull.start.y;
+  if (!pull.active) {
+    // Leave sideways swipes (code blocks, tables) and upward scrolling alone.
+    if (dy < -6 || Math.abs(dx) > 12 && Math.abs(dx) > dy) { pull.start = undefined; return; }
+    if (dy < 10) return;
+    pull.active = true;
+  }
+  event.preventDefault();
+  pull.distance = Math.min(110, Math.max(0, (dy - 10) * 0.5));
+  showPull(pull.distance);
+}, { passive: false });
+const endPull = () => {
+  if (!pull.start) return;
+  const go = pull.active && pull.distance >= pullThreshold;
+  pull.start = undefined;
+  pull.active = false;
+  pull.distance = 0;
+  if (go) void refresh();
+  else showPull(0, true);
+};
+$('exchange').addEventListener('touchend', endPull);
+$('exchange').addEventListener('touchcancel', () => { pull.active = false; endPull(); });
 $('thinking').addEventListener('click', () => $('open-activity').click());
 $('reconnect').addEventListener('click', reconnect);
 $('restore-banner').addEventListener('click', () => $('open-sessions').click());

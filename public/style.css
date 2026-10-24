@@ -137,6 +137,15 @@ dialog::backdrop { background: rgb(3 7 18 / .66); }
 .session-row .check { color: var(--accent); }
 .session-empty { padding: 12px 4px; color: var(--muted); font-size: .88rem; }
 
+/* Pull to refresh */
+.exchange { position: relative; }
+.pull-indicator { position: absolute; top: -42px; left: 50%; z-index: 5; width: 36px; height: 36px; margin-left: -18px; border: 1px solid var(--border); border-radius: 50%; background: var(--surface-2); color: var(--muted); display: flex; align-items: center; justify-content: center; pointer-events: none; opacity: var(--pull-opacity, 0); transform: translateY(var(--pull, 0px)) rotate(var(--pull-turn, 0deg)); box-shadow: 0 4px 14px rgb(3 7 18 / .4); }
+.pull-indicator svg { width: 18px; height: 18px; }
+.pull-indicator.ready { color: var(--accent); }
+.pull-indicator.settle { transition: transform .2s ease, opacity .2s ease; }
+.pull-indicator.refreshing { color: var(--accent); }
+.pull-indicator.refreshing svg { animation: spin .8s linear infinite; }
+
 /* Reconnect and restore */
 .notice-row { display: flex; align-items: center; gap: 8px; }
 .notice-row #notice { flex: 1; min-width: 0; }

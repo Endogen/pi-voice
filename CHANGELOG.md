@@ -1,5 +1,11 @@
 # Changelog
 
+## 2.1.0
+
+- **Pull to refresh:** pull down on the conversation (scrolled to the top) to re-sync it, the session list and an open Activity sheet with Pi. When Pi has stopped, the same gesture reconnects. It is built into the page, so no APK update is needed; sideways swipes, scrolled replies and open sheets are left alone.
+
+Reopen the app to use it.
+
 ## 2.0.0 — native APK 0.1.4 (versionCode 5)
 
 Pi Voice is now a native-app-only project.

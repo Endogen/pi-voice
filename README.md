@@ -83,7 +83,7 @@ On a hardware keyboard, **Ctrl+Enter** sends; Enter adds a new line.
 - **Middle:** your latest question and Pi's reply. Long replies scroll inside this area; History shows the whole conversation, newest first.
 - **Bottom:** the composer with the paperclip, microphone and send button. Short status messages appear above it and fade; errors stay until your next action.
 
-The chat shows complete messages, not the reply token by token. To follow a reply while it is being written, open Activity.
+The chat shows complete messages, not the reply token by token. To follow a reply while it is being written, open Activity. **Pull down** on the conversation to refresh it right away; it also updates by itself every 1.5 seconds.
 
 ### Sessions
 
@@ -115,7 +115,7 @@ The log covers the current task (up to 60 steps) and is kept only in that Pi's m
 Android can stop Termux while the phone sleeps, after a reboot or when memory runs low. Pi Voice remembers which conversations were open:
 
 - **Opening the app** starts Pi again and reopens the conversation you last had open, in its original folder. If that conversation has no saved messages yet, Pi continues the most recent session in your home folder instead.
-- **Returning to the app** while it shows "Disconnected" restarts Pi once by itself. Otherwise tap **Reconnect**.
+- **Returning to the app** while it shows "Disconnected" restarts Pi once by itself. Otherwise tap **Reconnect** or pull down on the conversation.
 - **Parallel sessions** that stopped appear as "Earlier sessions stopped · Restore" at the top of the chat. Restore them one by one from **Sessions**, or dismiss them; dismissing only hides the entry, the conversation stays saved in Pi.
 
 Unsaved state is gone when Pi stops: a reply that was still being written, queued follow-ups and unsent images. Text in the composer stays as long as the app was not closed.
@@ -186,7 +186,7 @@ To rotate the token, quit all Pi instances, delete `~/.pi/agent/voice/token` and
 | --- | --- |
 | App shows "Termux is required" or can't start Pi | Check `allow-external-apps=true` (`npm run native:setup`), grant **Run commands in Termux** under **App permissions**, and open Termux once if it was force-stopped. |
 | "No reply from Termux" | Same as above; also check that the project is at `~/pi-voice` and Pi at `~/.pi/agent/bin/pi`. |
-| Disconnected | Tap **Reconnect**. If that fails, open Termux and check `tmux -L pi-voice-native ls`. |
+| Disconnected | Tap **Reconnect** or pull down on the conversation. If that fails, open Termux and check `tmux -L pi-voice-native ls`. |
 | Pi keeps stopping in the background | Set Termux's battery use to **Unrestricted** and keep **Keep Termux awake** on. Some vendors need extra background exemptions. |
 | Reconnect reopened a different conversation | The previous one had no saved messages, or its session file is gone. Use `/resume` in Pi via **Open in Termux**. |
 | "Several Pi sessions you started yourself are running" | The app won't guess which one to connect to. Quit the extra Pis in Termux. Sessions started with **+** don't count. |

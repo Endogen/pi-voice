@@ -29,7 +29,8 @@
       </nav>
     </header>
 
-    <section class="exchange" aria-label="Latest question and answer">
+    <section id="exchange" class="exchange" aria-label="Latest question and answer">
+      <div id="pull-indicator" class="pull-indicator" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M20 12a8 8 0 1 1-2.3-5.6"/><path d="M20 4v5h-5"/></svg></div>
       <button id="restore-banner" class="restore-banner" hidden><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 12a9 9 0 1 0 2.6-6.4L3 8"/><path d="M3 3v5h5"/></svg><span id="restore-label">Earlier sessions stopped · Restore</span></button>
       <section id="question-card" class="question-card" aria-label="Your latest question" hidden>
         <h2 class="sr-only">You asked</h2><div id="latest-question" class="plain-text" tabindex="0"></div>

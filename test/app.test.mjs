@@ -1147,3 +1147,43 @@ test('old native shells and plain browsers explain how to reach the terminal ins
   assert.equal(page.el('open-terminal').hidden, true);
   assert.match(page.el('terminal-hint').textContent, /Pi Voice Native/);
 });
+
+function pullDown(h, distance, { dx = 0 } = {}) {
+  const exchange = h.el('exchange');
+  let prevented = false;
+  const touches = (x, y) => ({ touches: [{ clientX: x, clientY: y }], preventDefault() { prevented = true; } });
+  exchange.listeners.touchstart(touches(100, 100));
+  for (let step = 1; step <= 4; step++) exchange.listeners.touchmove(touches(100 + dx * step / 4, 100 + distance * step / 4));
+  exchange.listeners.touchend({ touches: [] });
+  return prevented;
+}
+
+test('pulling the conversation down re-syncs with Pi', async () => {
+  const h = await setup();
+  const before = h.requests.length;
+  assert.equal(pullDown(h, 60), true, 'The pull is handled by the page');
+  await flush();
+  assert.equal(h.requests.length, before, 'A short pull does nothing');
+  pullDown(h, 220);
+  await flush();
+  const paths = h.requests.slice(before).map((r) => r.path);
+  assert.ok(paths.includes('/api/state') && paths.includes('/api/sessions'));
+  assert.equal(h.el('pull-indicator').classes.has('refreshing'), true);
+});
+
+test('pulling down when Pi has stopped reconnects, and other gestures are left alone', async () => {
+  const h = await setup({ native: true });
+  h.network.state = () => { throw new Error('Server stopped'); };
+  await vm.runInContext('poll()', h.context);
+  assert.equal(pullDown(h, 30, { dx: 200 }), false, 'Sideways swipes keep scrolling code blocks');
+  h.el('latest-answer').scrollTop = 40;
+  pullDown(h, 220);
+  h.el('latest-answer').scrollTop = 0;
+  h.el('history-dialog').open = true;
+  pullDown(h, 220);
+  h.el('history-dialog').open = false;
+  assert.equal(h.nativeCalls.filter((call) => call.method === 'reconnect').length, 0);
+  pullDown(h, 220);
+  assert.equal(h.nativeCalls.filter((call) => call.method === 'reconnect').length, 1);
+  assert.match(h.el('notice').textContent, /Starting Pi/);
+});
