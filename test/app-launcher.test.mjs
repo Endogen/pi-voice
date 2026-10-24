@@ -12,13 +12,18 @@ import { installShortcut, openShortcutPicker } from '../install-shortcut.mjs';
 const exec = promisify(execFile);
 const launcher = fileURLToPath(new URL('../launch.mjs', import.meta.url));
 const prefix = process.env.PREFIX || '/usr';
+const flock = await exec('sh', ['-c', 'command -v flock']).then(({ stdout }) => stdout.trim(), () => undefined);
+const bash = await exec('sh', ['-c', 'command -v bash']).then(({ stdout }) => stdout.trim());
+const needsFlock = { skip: !flock && 'Requires util-linux flock (available in Termux/Linux).' };
 
 async function fixture(t, fakePi) {
   const directory = await mkdtemp(join(tmpdir(), 'pi-voice-app-launch-'));
   t.after(() => rm(directory, { recursive: true, force: true }));
   const bin = join(directory, 'bin');
   await mkdir(bin);
-  await symlink(join(prefix, 'bin', 'flock'), join(bin, 'flock'));
+  if (flock) await symlink(flock, join(bin, 'flock'));
+  await symlink(bash, join(bin, 'bash'));
+  await symlink(process.execPath, join(bin, 'node'));
   await writeFile(join(bin, 'pi'), `#!${process.execPath}\n${fakePi}`, { mode: 0o700 });
   await writeFile(join(bin, 'termux-open-url'), `#!${process.execPath}\nrequire('node:fs').writeFileSync(process.env.OPENED, JSON.stringify(process.argv.slice(2)));`, { mode: 0o700 });
   const env = {
@@ -30,7 +35,7 @@ async function fixture(t, fakePi) {
 
 const recordPi = `require('node:fs').appendFileSync(process.env.STARTED, JSON.stringify({ args: process.argv.slice(2), cwd: process.cwd() }) + '\\n');\n`;
 
-test('cold app launch resumes with -c; a leftover lock file is harmless; CLI modes stay separate', async (t) => {
+test('cold app launch resumes with -c; a leftover lock file is harmless; CLI modes stay separate', needsFlock, async (t) => {
   const { directory, env } = await fixture(t, recordPi);
   const voice = join(directory, 'voice');
   await mkdir(voice);
@@ -47,7 +52,7 @@ test('cold app launch resumes with -c; a leftover lock file is harmless; CLI mod
   assert.equal((await launches()).length, 3);
 });
 
-test('rapid home-screen taps start only one Pi and the other tap opens its bridge', async (t) => {
+test('rapid home-screen taps start only one Pi and the other tap opens its bridge', needsFlock, async (t) => {
   const { env } = await fixture(t, recordPi + `
 const fs = require('node:fs');
 const path = require('node:path');
@@ -77,7 +82,7 @@ setTimeout(() => server.listen(0, '127.0.0.1', () => {
   assert.match(JSON.parse(await readFile(env.OPENED, 'utf8'))[0], /^http:\/\/127\.0\.0\.1:\d+\/#[a-f0-9]{64}$/);
 });
 
-test('failed app startup reports failure and releases its kernel lock for a retry', async (t) => {
+test('failed app startup reports failure and releases its kernel lock for a retry', needsFlock, async (t) => {
   const { env } = await fixture(t, recordPi + 'process.exit(9);');
   for (let attempt = 0; attempt < 2; attempt++) {
     await assert.rejects(exec(process.execPath, [launcher, '--app'], { env, timeout: 10000 }), (error) => {
@@ -96,6 +101,24 @@ test('single-icon picker uses the official activity without a shell and catches 
     await assert.rejects(openShortcutPicker({ run: async () => result }), /Android could not open the shortcut picker/);
   }
   await assert.rejects(openShortcutPicker({ run: async () => { throw new Error('spawn am ENOENT'); } }), /spawn am ENOENT/);
+});
+
+test('shortcut installation refuses symlinks before changing their targets or other installed files', async (t) => {
+  const directory = await mkdtemp(join(tmpdir(), 'pi-voice-shortcut-links-'));
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  const home = join(directory, 'home');
+  const { script, icon } = await installShortcut({ home, prefix });
+  for (const path of [script, icon]) {
+    const original = await readFile(path);
+    const target = join(directory, 'target');
+    await writeFile(target, original);
+    await rm(path);
+    await symlink(target, path);
+    await assert.rejects(installShortcut({ home, prefix }), /Refusing to replace/);
+    assert.deepEqual(await readFile(target), original);
+    await rm(path);
+    await writeFile(path, original);
+  }
 });
 
 test('--pin creates resources and opens single-icon setup without starting Pi or a browser', async (t) => {
@@ -139,8 +162,8 @@ test('--pin reports Android setup failures instead of claiming the icon was adde
 });
 
 test('shortcut installer produces private real files, cold-launch env and preserves unrelated scripts', async (t) => {
-  const directory = await mkdtemp(join(tmpdir(), 'pi-voice-shortcut-'));
-  t.after(() => rm(directory, { recursive: true, force: true }));
+  const { directory } = await fixture(t, recordPi);
+  const prefix = directory;
   const home = join(directory, "home with 'quotes'");
   const { script, icon } = await installShortcut({ home, prefix });
   const content = await readFile(script, 'utf8');
@@ -149,20 +172,21 @@ test('shortcut installer produces private real files, cold-launch env and preser
   assert.match(content, /PI_CODING_AGENT_DIR:-\$HOME\/\.pi\/agent/);
   assert.match(content, /--app\n/);
   await exec(join(prefix, 'bin', 'bash'), ['-n', script]);
-  // Exercise a cold plugin environment: no ~/.profile and no inherited Pi PATH
-  // or LD_PRELOAD. The only Pi executable available is this harmless stub.
-  const agentBin = join(home, '.pi', 'agent', 'bin');
-  await mkdir(agentBin, { recursive: true });
-  const started = join(directory, 'cold-start.json');
-  await writeFile(join(agentBin, 'pi'), `#!${process.execPath}\nrequire('node:fs').writeFileSync(process.env.STARTED, JSON.stringify({ args: process.argv.slice(2), cwd: process.cwd(), home: process.env.HOME, preload: process.env.LD_PRELOAD }));`, { mode: 0o700 });
-  await exec(join(prefix, 'bin', 'bash'), [script], {
-    env: { HOME: directory, PATH: join(prefix, 'bin'), STARTED: started }, timeout: 10000,
+  await t.test('cold plugin launch uses real file locking', needsFlock, async () => {
+    // No ~/.profile or inherited Pi PATH/LD_PRELOAD; Pi itself is a harmless stub.
+    const agentBin = join(home, '.pi', 'agent', 'bin');
+    await mkdir(agentBin, { recursive: true });
+    const started = join(directory, 'cold-start.json');
+    await writeFile(join(agentBin, 'pi'), `#!${process.execPath}\nrequire('node:fs').writeFileSync(process.env.STARTED, JSON.stringify({ args: process.argv.slice(2), cwd: process.cwd(), home: process.env.HOME, preload: process.env.LD_PRELOAD }));`, { mode: 0o700 });
+    await exec(join(prefix, 'bin', 'bash'), [script], {
+      env: { HOME: directory, PATH: join(prefix, 'bin'), STARTED: started }, timeout: 10000,
+    });
+    const cold = JSON.parse(await readFile(started, 'utf8'));
+    assert.deepEqual(cold.args, ['--voice-open', '-c']);
+    assert.equal(cold.cwd, home);
+    assert.equal(cold.home, home);
+    assert.equal(cold.preload, join(prefix, 'lib', 'libtermux-exec.so'));
   });
-  const cold = JSON.parse(await readFile(started, 'utf8'));
-  assert.deepEqual(cold.args, ['--voice-open', '-c']);
-  assert.equal(cold.cwd, home);
-  assert.equal(cold.home, home);
-  assert.equal(cold.preload, join(prefix, 'lib', 'libtermux-exec.so'));
   assert.equal((await stat(script)).mode & 0o777, 0o700);
   assert.equal((await stat(icon)).mode & 0o777, 0o600);
   assert.equal((await stat(join(home, '.shortcuts'))).mode & 0o777, 0o700);

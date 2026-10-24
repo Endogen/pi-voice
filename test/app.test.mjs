@@ -115,6 +115,45 @@ function result(text, final = true) {
   return { results: [Object.assign([{ transcript: text }], { isFinal: final })] };
 }
 
+test('completed speech ignores duplicate completion and late callbacks during a later recording', async () => {
+  const h = await setup({ auto: true });
+  h.el('microphone').click();
+  const first = h.instances[0];
+  first.onresult(result('First question'));
+  first.onend();
+  await flush();
+  assert.equal(h.prompts.length, 1);
+  first.onend();
+  await flush();
+  assert.equal(h.prompts.length, 1, 'A duplicate end must not send the transcript again');
+
+  h.el('microphone').click();
+  const second = h.instances[1];
+  second.onresult(result('Second question', false));
+  first.onresult(result('Late first question'));
+  first.onerror({ error: 'network' });
+  first.onend();
+  assert.equal(h.el('draft').value, 'Second question');
+  assert.equal(h.el('microphone').attributes['aria-pressed'], 'true');
+  assert.equal(h.el('send').disabled, true);
+  second.onresult(result('Second question'));
+  second.onend();
+  await flush();
+  assert.deepEqual(h.prompts.map((prompt) => prompt.text), ['First question', 'Second question']);
+});
+
+test('an acknowledged prompt with no assistant reply does not leave the app permanently busy', async () => {
+  const h = await setup();
+  h.el('draft').value = 'Task stopped before a reply';
+  await vm.runInContext('send()', h.context);
+  h.state.messages = [{ id: 'accepted-user', role: 'user', text: 'Task stopped before a reply' }];
+  await vm.runInContext('poll()', h.context);
+  assert.equal(h.el('thinking').hidden, true);
+  assert.equal(h.el('abort').hidden, true);
+  assert.equal(h.el('new-session').disabled, false);
+  assert.match(h.el('latest-answer').textContent, /No reply yet/);
+});
+
 const photo = (extra = {}) => ({ name: 'screenshot.png', type: 'image/png', size: 120000, ...extra });
 async function attach(h, files = [photo()]) {
   h.context.selectedFiles = files;

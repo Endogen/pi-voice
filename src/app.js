@@ -5,7 +5,7 @@ const storage = {
   get(key) { try { return localStorage.getItem(`pi-voice-${key}`); } catch { return null; } },
   set(key, value) { try { localStorage.setItem(`pi-voice-${key}`, value); } catch {} },
 };
-let token = location.hash.slice(1) || storage.get('token') || '';
+const token = location.hash.slice(1) || storage.get('token') || '';
 if (location.hash) {
   storage.set('token', token);
   history.replaceState(null, '', location.pathname);
@@ -368,7 +368,9 @@ async function poll() {
     if (optimisticQuestion) {
       const latest = latestExchange(next.messages);
       const isOurQuestion = latest.question?.text === optimisticQuestion.text && (latest.question?.imageCount || 0) === optimisticQuestion.imageCount && JSON.stringify(latest.question) !== optimisticQuestion.baseline;
-      if (changed || (isOurQuestion && (next.busy || latest.answer))) optimisticQuestion = undefined;
+      // Once Pi persists our question, its busy/pending state is authoritative.
+      // A stopped or failed task may settle without any assistant reply.
+      if (changed || isOurQuestion) optimisticQuestion = undefined;
     }
     state = next;
     connected = true;
@@ -457,10 +459,13 @@ async function startSpeech() {
   const originalSession = state.sessionId;
   let transcript = '';
   let error = false;
+  let finished = false;
   listening = true;
   $('listening').textContent = 'Listening… Pause when done';
   controls();
   const finish = async () => {
+    if (finished) return;
+    finished = true;
     listening = false;
     recognition = undefined;
     listenRequest = undefined;
@@ -489,6 +494,7 @@ async function startSpeech() {
     engine.interimResults = true;
     engine.maxAlternatives = 1;
     engine.onresult = (event) => {
+      if (finished || cancelSpeech) return;
       const final = [];
       const interim = [];
       for (const result of event.results) (result.isFinal ? final : interim).push(result[0].transcript);
@@ -496,6 +502,7 @@ async function startSpeech() {
       $('draft').value = appendSpeech(base, [...final, ...interim].join(' '));
     };
     engine.onerror = (event) => {
+      if (finished) return;
       error = true;
       const hints = {
         'not-allowed': nativeSpeech ? 'Allow microphone permission for Pi Voice Native in Android app settings.' : 'Allow microphone permission for Chrome in Android settings and this site.',

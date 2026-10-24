@@ -89,6 +89,23 @@ test('native wait is bounded and does not create any Pi process itself', async (
   await assert.rejects(waitForConnection({ directory, timeout: 25, interval: 5 }), /Pi did not become ready/);
 });
 
+test('native wait deadline includes stalled discovery probes and long polling intervals', async (t) => {
+  const h = await fixture(t, () => {});
+  for (let i = 0; i < 12; i++) {
+    const pid = 5000 + i;
+    await writeFile(join(h.directory, 'endpoints', `${pid}.json`), JSON.stringify({ ...h.endpoint, pid }));
+  }
+  const start = performance.now();
+  await assert.rejects(waitForConnection({ directory: h.directory, timeout: 80, interval: 1000 }), /Pi did not become ready/);
+  assert.ok(performance.now() - start < 800, 'The overall deadline must abort in-flight probes');
+  assert.ok(h.calls() <= 4, 'Expired discovery must not probe the remaining records');
+
+  await rm(join(h.directory, 'endpoints'), { recursive: true });
+  const emptyStart = performance.now();
+  await assert.rejects(waitForConnection({ directory: h.directory, timeout: 40, interval: 1000 }), /Pi did not become ready/);
+  assert.ok(performance.now() - emptyStart < 800, 'The polling delay must respect the deadline');
+});
+
 test('native setup is explicit and preserves unrelated Termux properties and comments', () => {
   const contents = '# leave comments\nextra-keys = test\nallow-external-apps = false\n';
   assert.equal(enableExternalApps(contents), '# leave comments\nextra-keys = test\nallow-external-apps=true\n');

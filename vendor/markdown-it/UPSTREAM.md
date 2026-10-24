@@ -9,7 +9,7 @@
 - `markdown-it.min.js` is the unmodified browser UMD distribution, originally
   `package/dist/browser/markdown-it.umd.min.js` in that tarball.
 
-`build.mjs` concatenates this parser and the two `src/` scripts into the existing
+`build.mjs` concatenates this parser and the `src/` scripts into the existing
 `public/app.js` asset. It omits the source-map reference; the source map is not
 vendored. No CDN requests, runtime npm dependencies, or bundler are required.
 

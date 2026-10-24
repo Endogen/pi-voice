@@ -167,7 +167,7 @@ The settings status reports command success/failure; it is not an independent An
 - **Android via Termux:API:** select this fallback if browser speech fails. Install the matching Termux:API Android plugin and its command-line client (`pkg install termux-api`) if you want this fallback. Grant **Termux:API → Microphone** permission if needed. Its language/defaults are separate from the browser language setting.
 - **Keyboard dictation:** tap the draft box and use your Android keyboard's microphone, then Send. This also works when direct browser speech is unavailable.
 
-This is push-to-talk, not a background listener or wake-word assistant. Transcription/offline support depends on the browser/Android recognition service. Pi replies are not read aloud.
+This is push-to-talk, not a background listener or wake-word assistant. Transcription/offline support depends on the browser/Android recognition service. Pi replies can be read aloud on request using **Read aloud**; they never play automatically.
 
 ## How it connects and renders
 
@@ -247,6 +247,8 @@ npm run native:setup   # Show external-command setting without changing it
 ```
 
 The integration smoke test starts the installed Pi in an isolated temporary RPC session and checks extension registration, session identity, UI serving, HTTP authentication, wake-lock route wiring, two real new-session operations through the browser API, stale-action rejection, unchanged port/token, native text+image/image-only delivery and graceful shutdown. A test-only input extension captures/consumes image prompts before a provider request, so it makes **no model/API calls** and does not change the device's real wake lock. Unit tests simulate command success/failure, multi-session ownership and cleanup without touching the shared Android wake lock. Launcher tests use fake Pi/browser/Android executables and real file locking to check cold resume, running-session reuse, rapid repeated taps, failure/retry, single-icon setup without starting Pi/browser, Android error reporting and a minimal plugin environment without shell-profile initialization.
+
+Launcher tests resolve tools from `PATH`. The four checks requiring real `flock` are explicitly skipped when it is unavailable (for example on macOS); run the complete suite in Termux/Linux to cover kernel locking. Shortcut generation, permissions, overwrite protection and shell syntax are still checked. For a Pi installed elsewhere, run the RPC integration with `PI_VOICE_TEST_PI=/absolute/path/to/pi PI_VOICE_TEST_EXTENSION="$PWD/extension.mjs" npm run test:integration`.
 
 The native PTY integration separately verifies a real Pi cold start, authenticated discovery, repeated-launch reuse, New session in normal TUI mode, stable URL and clean host exit. It uses a unique tmux server and temporary state, without Chrome, provider calls, real wake-lock changes or user-session changes. The APK builder checks signature and zip alignment.
 

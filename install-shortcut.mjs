@@ -1,4 +1,4 @@
-import { mkdir, chmod, readFile, writeFile } from 'node:fs/promises';
+import { mkdir, chmod, lstat, readFile, writeFile } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
@@ -12,10 +12,27 @@ const quote = (text) => `'${text.replaceAll("'", "'\\''")}'`;
 export async function installShortcut({ home = homedir(), prefix = process.env.PREFIX || '/data/data/com.termux/files/usr' } = {}) {
   const shortcuts = join(home, '.shortcuts');
   const icons = join(shortcuts, 'icons');
+  const script = join(shortcuts, 'Pi Voice');
+  const icon = join(icons, 'Pi Voice.png');
+  let existingScript = false;
+  // Check both destinations before updating either one. Never follow a link
+  // and overwrite/chmod an unrelated target, including a dangling symlink.
+  for (const path of [script, icon]) {
+    const info = await lstat(path).catch((error) => {
+      if (error.code === 'ENOENT') return undefined;
+      throw error;
+    });
+    if (!info) continue;
+    if (!info.isFile()) throw new Error(`Refusing to replace a non-file shortcut resource: ${path}`);
+    if (path === script) {
+      const current = await readFile(script, 'utf8');
+      if (!current.includes(`\n${marker}\n`)) throw new Error(`Refusing to replace your existing shortcut: ${script}`);
+      existingScript = true;
+    }
+  }
   await mkdir(icons, { recursive: true, mode: 0o700 });
   await chmod(shortcuts, 0o700);
   await chmod(icons, 0o700);
-  const script = join(shortcuts, 'Pi Voice');
   const content = `#!${join(prefix, 'bin', 'bash')}
 ${marker}
 # Widget commands do not source ~/.profile or fully initialise Termux's env.
@@ -33,16 +50,8 @@ if [ "$status" -ne 0 ]; then
 fi
 exit "$status"
 `;
-  try {
-    await writeFile(script, content, { flag: 'wx', mode: 0o700 });
-  } catch (error) {
-    if (error.code !== 'EEXIST') throw error;
-    const current = await readFile(script, 'utf8');
-    if (!current.includes(`\n${marker}\n`)) throw new Error(`Refusing to replace your existing shortcut: ${script}`);
-    await writeFile(script, content, { mode: 0o700 });
-  }
+  await writeFile(script, content, { flag: existingScript ? 'w' : 'wx', mode: 0o700 });
   await chmod(script, 0o700);
-  const icon = join(icons, 'Pi Voice.png');
   await writeFile(icon, await readFile(join(projectDir, 'public', 'icon-192.png')), { mode: 0o600 });
   await chmod(icon, 0o600);
   return { script, icon };

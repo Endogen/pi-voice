@@ -45,7 +45,6 @@ export default function installVoiceExtension(pi, { wakeLock = createWakeLock({ 
   let context;
   let starting;
   let newSessionAction;
-  let messages = [];
   const endpointFile = join(stateDir, 'endpoints', `${process.pid}.json`);
   // Runtime replacement reloads this module. Carry only the preferred port,
   // never a stale Pi context, across /new, /resume and /reload.
@@ -56,7 +55,6 @@ export default function installVoiceExtension(pi, { wakeLock = createWakeLock({ 
   const snapshot = () => {
     // Pi persists a message AFTER emitting message_end. Read at request time so
     // the most recent user/reply is not missing during a long-running tool call.
-    refreshMessages();
     return {
       pid: process.pid,
       sessionId: context.sessionManager.getSessionId(),
@@ -70,28 +68,25 @@ export default function installVoiceExtension(pi, { wakeLock = createWakeLock({ 
       pending: context.hasPendingMessages(),
       wakeLock: wakeLock.status(),
       newSessionAction: newSessionAction ? { id: newSessionAction.id, status: newSessionAction.status, error: newSessionAction.error } : undefined,
-      messages,
+      messages: readMessages(),
     };
   };
 
-  const refreshMessages = () => {
-    messages = context.sessionManager.getBranch()
-      .filter((entry) => entry.type === 'message' && ['user', 'assistant'].includes(entry.message.role))
-      .slice(-40)
-      .map((entry) => {
-        const imageCount = Array.isArray(entry.message.content) ? entry.message.content.filter((part) => part.type === 'image').length : 0;
-        // Never return base64 in the frequently polled state/history response.
-        return { id: entry.id, role: entry.message.role, text: textOf(entry.message).slice(-24000), ...(imageCount ? { imageCount } : {}) };
-      })
-      .filter((message) => message.text || message.imageCount);
-  };
+  const readMessages = () => context.sessionManager.getBranch()
+    .filter((entry) => entry.type === 'message' && ['user', 'assistant'].includes(entry.message.role))
+    .slice(-40)
+    .map((entry) => {
+      const imageCount = Array.isArray(entry.message.content) ? entry.message.content.filter((part) => part.type === 'image').length : 0;
+      // Never return base64 in the frequently polled state/history response.
+      return { id: entry.id, role: entry.message.role, text: textOf(entry.message).slice(-24000), ...(imageCount ? { imageCount } : {}) };
+    })
+    .filter((message) => message.text || message.imageCount);
 
   async function start(ctx, port) {
     context = ctx;
     if (bridge) return bridge;
     if (starting) return starting;
     starting = (async () => {
-      refreshMessages();
       const token = await loadToken();
       const created = await createVoiceBridge({
         token, port,
@@ -171,17 +166,11 @@ export default function installVoiceExtension(pi, { wakeLock = createWakeLock({ 
     }
   });
   pi.on('session_shutdown', stop);
-  pi.on('message_end', (_event, ctx) => {
-    if (!bridge) return;
-    context = ctx;
-    refreshMessages();
-  });
-  // These notifications also refresh model/status and branch changes without polling the session file.
-  for (const event of ['agent_start', 'agent_settled', 'model_select', 'session_tree', 'session_compact', 'session_info_changed']) {
+  // Keep the live context current; history is read only when a snapshot is requested.
+  for (const event of ['message_end', 'agent_start', 'agent_settled', 'model_select', 'session_tree', 'session_compact', 'session_info_changed']) {
     pi.on(event, (_event, ctx) => {
       if (!bridge) return;
       context = ctx;
-      refreshMessages();
     });
   }
 
