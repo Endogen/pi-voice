@@ -1,0 +1,35 @@
+# Local credentials, Pi sessions/state, signing material and editor data
+.env
+.env.*
+!.env.example
+.pi/
+.termux/
+.shortcuts/
+auth.json
+token
+endpoints/
+sessions/
+*.jsonl
+*.log
+*.key
+*.pem
+*.keystore
+*.jks
+*.p12
+*.pfx
+*.password
+*.swp
+.DS_Store
+
+# Dependencies/caches (runtime has no npm dependencies)
+node_modules/
+.cache/
+__pycache__/
+*.pyc
+
+# Native tools, SDK downloads and generated outputs: publish APK via Releases
+native/tools/
+native/out/
+native/res/drawable/icon.png
+*.apk
+*.aab

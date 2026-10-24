@@ -1,0 +1,86 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, interactive-widget=resizes-content">
+  <meta name="theme-color" content="#101723">
+  <meta name="color-scheme" content="dark">
+  <title>Pi Voice</title>
+  <link rel="manifest" href="/manifest.webmanifest">
+  <link rel="icon" href="/icon.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="/style.css">
+  <script src="/app.js" defer></script>
+</head>
+<body>
+  <main class="workspace">
+    <header class="app-bar">
+      <img src="/icon.svg" width="36" height="36" alt="">
+      <div class="app-title"><h1>Pi Voice</h1><p id="connection" role="status">Connecting to Pi…</p></div>
+      <nav aria-label="App controls">
+        <button id="new-session" class="quiet" aria-label="Start a new session" title="New session — finish or stop the current task first" disabled><span id="new-session-label">New</span></button>
+        <button id="open-history" class="quiet" aria-haspopup="dialog" aria-controls="history-dialog">History</button>
+        <button id="open-settings" class="icon-button quiet" aria-label="Open settings" aria-haspopup="dialog" aria-controls="settings-dialog"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h16M4 17h16M8 4v6M16 14v6"/></svg></button>
+      </nav>
+    </header>
+
+    <section class="exchange" aria-label="Latest question and answer">
+      <section id="question-card" class="question-card" aria-label="Your latest question" hidden>
+        <h2>You asked</h2><div id="latest-question" class="plain-text" tabindex="0"></div>
+      </section>
+      <div class="answer-toolbar">
+        <h2 id="answer-heading">Pi’s reply</h2>
+        <div id="thinking" class="thinking" role="status" aria-live="polite" hidden><span class="thinking-dots" aria-hidden="true"><i></i><i></i><i></i></span><span id="thinking-label">Pi is thinking…</span></div>
+        <button id="abort" class="quiet stop-button" disabled hidden>Stop Pi</button>
+      </div>
+      <div id="latest-answer" class="answer-pane empty-answer" tabindex="0" aria-label="Pi’s latest reply" aria-busy="false"><p>Your conversation belongs here.</p><p class="muted">Tap Speak or type a question below.</p></div>
+    </section>
+
+    <section class="composer" aria-label="Write, speak or attach images to your next message">
+      <div id="attachments" class="attachments" aria-label="Selected images" hidden></div>
+      <p id="image-hint" class="image-hint" hidden>Images send only when you tap Send. Remove any private details first.</p>
+      <input id="image-input" type="file" accept="image/jpeg,image/png,image/webp" multiple hidden>
+      <div class="draft-row">
+        <button id="attach" class="icon-button quiet" aria-label="Attach images" aria-controls="image-input" title="Attach up to 4 images (JPEG, PNG, WebP)" disabled><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m8 13 7-7a3 3 0 0 1 4 4L9 20a5 5 0 0 1-7-7L13 2M6 15 16 5"/></svg></button>
+        <label class="sr-only" for="draft">Your message</label>
+        <textarea id="draft" rows="2" maxlength="16000" placeholder="Ask Pi, or tap Speak…"></textarea>
+        <button id="clear" class="icon-button quiet" aria-label="Clear draft and images" title="Clear draft and images">×</button>
+      </div>
+      <div class="compose-actions">
+        <button id="microphone" class="mic" disabled><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="9" y="3" width="6" height="12" rx="3"/><path d="M5 10v2a7 7 0 0 0 14 0v-2M12 19v3M8 22h8"/></svg><span id="microphone-label">Speak</span></button>
+        <p id="listening" role="status">Review, then send</p>
+        <button id="send" disabled>Send<svg viewBox="0 0 24 24" aria-hidden="true"><path d="m5 12 7-7 7 7M12 5v15"/></svg></button>
+      </div>
+      <p id="notice" role="status" aria-live="polite" tabindex="0">Open this app with /voice in Pi.</p>
+    </section>
+  </main>
+
+  <dialog id="history-dialog" aria-labelledby="history-title">
+    <div class="sheet-header"><h2 id="history-title">Conversation history</h2><button id="close-history" class="icon-button quiet" aria-label="Close history">×</button></div>
+    <div class="sheet-body"><p class="hint">Newest messages first. Tool output stays in Termux.</p><div id="messages"></div></div>
+  </dialog>
+
+  <dialog id="settings-dialog" aria-labelledby="settings-title">
+    <div class="sheet-header"><h2 id="settings-title">Settings</h2><button id="close-settings" class="icon-button quiet" aria-label="Close settings">×</button></div>
+    <div class="sheet-body settings-body">
+      <section class="settings-section" aria-label="Speech settings">
+        <h3>Voice input</h3>
+        <label class="check"><input type="checkbox" id="autosend"> Send automatically after speech</label>
+        <p class="hint">Off by default, so you can review the transcript first.</p>
+        <label for="engine">Speech engine</label>
+        <select id="engine"><option id="speech-primary" value="browser">Browser speech (recommended)</option><option value="termux">Android via Termux:API (fallback)</option></select>
+        <label id="speech-language-label" for="language">Browser speech language</label>
+        <input id="language" type="text" value="en-US" maxlength="35" placeholder="en-US, de-DE, …" autocapitalize="off" spellcheck="false">
+        <p class="hint">Android fallback uses the Termux:API language. Allow microphone access when Android asks. Your speech provider may process audio online; this app stores no audio.</p>
+      </section>
+      <section class="settings-section" aria-label="Background operation">
+        <h3>Keep Pi available</h3>
+        <label class="check"><input type="checkbox" id="awake" checked> Keep Termux awake</label>
+        <p id="wake-status" class="hint" role="status">Checking stay-awake support…</p>
+        <p class="hint">Prevents CPU sleep, not Android force-closing. Uses more battery. In Android, set Termux battery use to <strong>Unrestricted</strong> / allow background activity. The display may still sleep. Termux’s wake lock is shared across its sessions.</p>
+      </section>
+      <section class="settings-section session" aria-label="Connected session"><h3>Connected Pi</h3><strong id="session">No session connected</strong><small id="directory"></small><small id="model"></small></section>
+      <section class="settings-section"><h3>Home-screen app</h3><p id="home-launch-hint" class="hint">For one-tap startup, install Termux:Widget from the same source as Termux, then add its <strong>Pi Voice</strong> home-screen shortcut. It starts/resumes Pi and opens Chrome. A Chrome-only shortcut needs Pi already running.</p><p class="hint">Replies appear after each message completes; the working indicator stays visible during generation/tools. Reconnect: <code>pi-voice --app</code> in Termux or <code>/voice</code> in Pi. Stop bridge: <code>/voice stop</code>. Phone-only connection; no public server.</p></section>
+    </div>
+  </dialog>
+</body>
+</html>
