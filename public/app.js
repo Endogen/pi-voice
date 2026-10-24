@@ -278,6 +278,22 @@ let attachments = [];
 let preparingImages = false;
 let attachmentButtons = [];
 let readingSourceKey;
+// Parallel sessions: every running Pi has its own bridge. This page talks to
+// the others through its own bridge, which relays requests by Pi process ID.
+let targetPid = Number(storage.get('session-pid')) || undefined;
+let expectedPid;
+let sessions = [];
+let sessionsSupported = true;
+let sessionsPolling = false;
+let spawnRequest;
+let switchPending = false;
+let hostPid;
+let pollCount = 0;
+let noticeTimer;
+const sessionBusy = new Map();
+const unread = new Set();
+// The native shell pads its WebView by the system bars; never pad twice.
+document.documentElement?.classList.toggle('native', Boolean(window.PiVoiceAndroid));
 const playback = globalThis.PiVoicePlayback.create({
   onState: () => readingControls(),
   onError: (code) => {
@@ -313,13 +329,44 @@ function speechHint() {
 }
 
 function notice(text, error = false) {
+  clearTimeout(noticeTimer);
   setText('notice', text);
   $('notice').classList.toggle('error', error);
+  $('notice').hidden = !text;
+  // Confirmations fade out; errors stay until the next action replaces them.
+  if (text && !error) noticeTimer = setTimeout(() => { if ($('notice').textContent === text) notice(''); }, 6000);
+}
+const busyHere = () => Boolean(state?.busy || state?.pending || optimisticQuestion);
+const currentPid = () => state?.pid;
+const folder = (path) => String(path || '').split('/').filter(Boolean).at(-1) || path || '';
+function header() {
+  const working = connected && (busyHere() || sending);
+  const dot = $('status-dot');
+  dot.classList.toggle('ready', connected && !working);
+  dot.classList.toggle('working', working);
+  dot.classList.toggle('offline', !connected);
+  setText('session-title', state?.title || (state?.sessionName && state.sessionName !== 'Pi session' ? state.sessionName : 'Pi Voice'));
+  if (connected) setText('connection', [working ? 'Working' : 'Ready', folder(state?.cwd)].filter(Boolean).join(' · '));
+  const others = sessions.filter((item) => item.pid !== currentPid());
+  const fresh = others.some((item) => unread.has(item.pid));
+  $('sessions-badge').hidden = !others.length;
+  setText('sessions-badge', String(sessions.length));
+  $('sessions-badge').classList.toggle('unread', fresh);
+  $('open-sessions').setAttribute('aria-label', `Switch session (${sessions.length || 1} running${fresh ? ', new reply' : ''})`);
 }
 function controls() {
-  const switching = sessionStarting();
-  $('new-session').disabled = !connected || switching || sending || listening || preparingImages || Boolean(state?.busy || state?.pending || optimisticQuestion);
+  const switching = sessionStarting() || Boolean(spawnRequest) || switchPending;
+  $('new-session').disabled = !connected || switching || sending || listening || preparingImages;
+  $('sessions-new').disabled = $('new-session').disabled;
+  $('new-session').classList.toggle('busy', switching);
   setText('new-session-label', switching ? 'Starting…' : 'New');
+  const hasDraft = Boolean($('draft').value.trim() || attachments.length);
+  $('prompt-box').classList.toggle('has-draft', hasDraft);
+  $('prompt-box').classList.toggle('listening', listening);
+  $('clear').hidden = !hasDraft || listening;
+  $('listening').classList.toggle('subtle', !listening && !attachments.length && !$('autosend').checked);
+  $('listening').classList.toggle('live', listening);
+  header();
   $('send').disabled = switching || !connected || sending || listening || preparingImages || (!$('draft').value.trim() && !attachments.length);
   $('attach').disabled = switching || !connected || sending || listening || preparingImages;
   $('image-input').disabled = $('attach').disabled;
@@ -331,6 +378,9 @@ function controls() {
   $('draft').readOnly = switching || listening || sending || preparingImages;
   $('microphone').setAttribute('aria-pressed', String(listening));
   $('microphone-label').textContent = listening ? 'Stop listening' : 'Speak';
+  $('microphone').setAttribute('aria-label', listening ? 'Stop listening' : 'Speak');
+  $('microphone').title = listening ? 'Stop listening' : 'Speak';
+  $('draft').placeholder = listening ? 'Listening…' : 'Ask Pi anything…';
   $('microphone').classList.toggle('active', listening);
   if (!listening) setText('listening', speechHint());
   const working = Boolean(connected && (state?.busy || state?.pending || sending || optimisticQuestion));
@@ -356,6 +406,7 @@ function readingControls() {
   $('read-aloud').disabled = !playback.supported || listening || (!target && !playback.active);
   $('read-aloud').setAttribute('aria-pressed', String(playback.active));
   $('read-aloud').setAttribute('aria-label', playback.active ? 'Stop reading Pi’s reply' : 'Read Pi’s latest reply aloud');
+  $('read-aloud').title = playback.active ? 'Stop reading' : 'Read aloud';
   $('read-aloud').classList.toggle('active', playback.active);
   setText('read-label', playback.active ? 'Stop reading' : 'Read aloud');
 }
@@ -460,10 +511,10 @@ async function addImages(selection) {
   } catch (error) { notice(error.message, true); }
   finally { preparingImages = false; controls(); }
 }
-async function api(path, { method = 'GET', body, signal } = {}) {
+async function api(path, { method = 'GET', body, signal, pid = targetPid } = {}) {
   const response = await fetch(`/api/${path}`, {
     method, signal: signal || (typeof AbortSignal !== 'undefined' && AbortSignal.timeout ? AbortSignal.timeout(12000) : undefined), cache: 'no-store',
-    headers: { Authorization: `Bearer ${token}`, ...(body ? { 'Content-Type': 'application/json' } : {}) },
+    headers: { Authorization: `Bearer ${token}`, ...(body ? { 'Content-Type': 'application/json' } : {}), ...(pid ? { 'X-Pi-Voice-Pid': String(pid) } : {}) },
     body: body ? JSON.stringify(body) : undefined,
   });
   const result = await response.json();
@@ -515,8 +566,8 @@ function renderLatest(messages) {
   if (pane.dataset.content !== answerText || pane.dataset.question !== questionText || !answerText) {
     if (answerText) renderBody(pane, answerText, true, 'answer-pane ');
     else {
-      pane.className = 'answer-pane empty-answer';
-      pane.textContent = busy ? 'Working on your request…' : questionText ? 'No reply yet. Ask Pi to continue, or send your next question.' : 'Tap Speak or type a question below.';
+      pane.className = `answer-pane empty-answer${busy || questionText ? '' : ' idle-empty'}`;
+      pane.textContent = busy ? 'Working on your request…' : questionText ? 'No reply yet. Ask Pi to continue, or send your next question.' : 'Tap the microphone or type a question below.';
     }
     pane.dataset.content = answerText;
     pane.dataset.question = questionText;
@@ -585,7 +636,9 @@ function checkNewSession(next) {
   return false;
 }
 async function startNewSession() {
-  if (!connected || sessionStarting() || sending || listening || preparingImages || state?.busy || state?.pending || optimisticQuestion) return;
+  if (!connected || sessionStarting() || spawnRequest || sending || listening || preparingImages) return;
+  // A busy Pi keeps working: the new conversation gets its own Pi beside it.
+  if (busyHere()) { await startParallelSession(); return; }
   const persistent = state.sessionPersistent !== false;
   const saved = persistent ? 'Your current conversation stays saved in Pi.' : 'WARNING: Pi was started with --no-session. This conversation will not be saved.';
   if (!confirm(`Start a new session? ${saved} Any unsent draft and attached images will be cleared once the new session is ready.`)) return;
@@ -607,11 +660,157 @@ async function startNewSession() {
     }
   } finally { controls(); }
 }
+async function startParallelSession() {
+  if (!sessionsSupported) { notice('Pi is busy. Restart Pi once to run sessions in parallel, or stop the current task first.', true); return; }
+  if (!confirm('Pi is still working here. Start a new session alongside it? This one keeps running; switch back any time from Sessions.')) return;
+  const request = { id: crypto.randomUUID(), deadline: Date.now() + 45000 };
+  spawnRequest = request;
+  notice('Starting a parallel session…');
+  controls();
+  try {
+    await api('session/spawn', { method: 'POST', body: { id: request.id } });
+    await pollSessions();
+  } catch (error) {
+    if (spawnRequest === request) {
+      spawnRequest = undefined;
+      notice(error.status === 404 ? 'Restart Pi once to run sessions in parallel. Your conversation and draft are kept.' : error.message, true);
+    }
+  } finally { controls(); }
+}
+function checkSpawn() {
+  const request = spawnRequest;
+  if (!request) return;
+  const match = sessions.find((item) => item.spawnId === request.id);
+  if (match) {
+    spawnRequest = undefined;
+    selectTarget(match.pid);
+    notice('New session ready. The previous one keeps running under Sessions.');
+    void poll();
+  } else if (Date.now() >= request.deadline) {
+    spawnRequest = undefined;
+    notice('The new session did not start in time. Check Termux (tmux -L pi-voice-native ls), then try again.', true);
+  }
+}
+// Point every later request at another running Pi. Nothing unsent is moved:
+// the draft stays editable and the bridge rejects prompts for a stale session.
+function selectTarget(pid) {
+  targetPid = pid && pid !== hostPid ? pid : undefined;
+  storage.set('session-pid', targetPid ? String(targetPid) : '');
+  switchPending = true;
+  pendingMessage = undefined;
+  optimisticQuestion = undefined;
+  lastFocus = '';
+  lastMessages = '';
+  unread.delete(pid);
+  cancelRecording();
+  playback.stop();
+}
+function switchTo(pid) {
+  $('sessions-dialog').close();
+  if (pid === currentPid() || sending || preparingImages || sessionStarting()) return;
+  selectTarget(pid);
+  notice('');
+  controls();
+  void poll();
+}
+async function closeSession(item) {
+  const working = item.busy || item.pending ? 'Pi is still working there; its task will stop. ' : '';
+  if (!confirm(`Close “${item.title || 'this session'}”? ${working}The conversation stays saved in Pi.`)) return;
+  try {
+    if (item.pid === currentPid()) selectTarget(hostPid);
+    await api('session/close', { method: 'POST', body: { sessionId: item.sessionId }, pid: item.pid });
+    sessions = sessions.filter((other) => other.pid !== item.pid);
+    unread.delete(item.pid);
+    renderSessions();
+    notice('Session closed. It remains saved in Pi.');
+    void poll();
+  } catch (error) { notice(error.message, true); }
+  finally { controls(); }
+}
+function renderSessions() {
+  const list = sessions.length ? sessions : state ? [{ ...state, pid: state.pid }] : [];
+  $('session-list').replaceChildren(...list.map((item) => {
+    const current = item.pid === currentPid();
+    const row = document.createElement('div');
+    row.className = `session-item${current ? ' current' : ''}`;
+    row.setAttribute('role', 'listitem');
+    const open = document.createElement('button');
+    open.className = 'session-row';
+    const dot = document.createElement('span');
+    dot.className = `status-dot ${item.busy || item.pending ? 'working' : 'ready'}`;
+    const text = document.createElement('span');
+    text.className = 'session-text';
+    const title = document.createElement('span');
+    title.className = 'session-title';
+    title.textContent = item.title || item.sessionName || 'Pi session';
+    const sub = document.createElement('span');
+    sub.className = `session-sub${unread.has(item.pid) ? ' fresh' : ''}`;
+    sub.textContent = [current ? 'Viewing' : '', item.busy || item.pending ? 'Working' : unread.has(item.pid) ? 'New reply' : 'Ready', folder(item.cwd)].filter(Boolean).join(' · ');
+    text.append(title, sub);
+    open.append(dot, text);
+    open.setAttribute('aria-current', String(current));
+    open.addEventListener('click', () => switchTo(item.pid));
+    row.append(open);
+    if (item.spawned && item.pid !== hostPid) {
+      const close = document.createElement('button');
+      close.className = 'icon-button';
+      close.setAttribute('aria-label', `Close ${title.textContent}`);
+      close.title = 'Close session';
+      close.innerHTML = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M18 6 6 18M6 6l12 12"/></svg>';
+      close.addEventListener('click', () => { void closeSession(item); });
+      row.append(close);
+    }
+    return row;
+  }));
+  $('sessions-hint').textContent = sessionsSupported
+    ? 'A new session started while Pi is working runs alongside it. Up to 4 sessions can run at once; each stays saved in Pi.'
+    : 'Restart Pi once to run and switch between parallel sessions.';
+}
+async function pollSessions() {
+  if (sessionsPolling || !connected || !sessionsSupported) return;
+  sessionsPolling = true;
+  try {
+    const result = await api('sessions', { pid: 0 });
+    hostPid = result.self;
+    const list = Array.isArray(result.sessions) ? result.sessions : [];
+    for (const item of list) {
+      const working = Boolean(item.busy || item.pending);
+      // A background session that finishes gets a "new reply" marker.
+      if (item.pid !== currentPid() && sessionBusy.get(item.pid) && !working) unread.add(item.pid);
+      sessionBusy.set(item.pid, working);
+    }
+    for (const pid of [...unread]) if (!list.some((item) => item.pid === pid)) unread.delete(pid);
+    sessions = list.sort((a, b) => (a.pid === hostPid ? -1 : b.pid === hostPid ? 1 : a.pid - b.pid));
+    checkSpawn();
+  } catch (error) {
+    if ([404, 501].includes(error.status)) sessionsSupported = false;
+  } finally {
+    sessionsPolling = false;
+    if ($('sessions-dialog').open) renderSessions();
+    controls();
+  }
+}
 async function poll() {
   if (polling) return;
   polling = true;
+  const requested = targetPid;
+  let stale = false;
   try {
-    const next = await api('state');
+    let next;
+    try { next = await api('state', { pid: requested }); }
+    catch (error) {
+      // The selected parallel session ended: fall back to the one hosting this page.
+      if (requested && error.status === 410 && requested === targetPid) {
+        selectTarget(undefined);
+        stale = true;
+        notice('That session has ended. Showing the main session.', true);
+        return;
+      }
+      throw error;
+    }
+    if (requested !== targetPid) { stale = true; return; }
+    const userSwitch = switchPending;
+    switchPending = false;
     const wasConnected = connected;
     const changed = state && state.sessionId !== next.sessionId;
     if (optimisticQuestion) {
@@ -623,7 +822,7 @@ async function poll() {
     }
     state = next;
     connected = true;
-    setText('connection', next.busy || next.pending ? 'Connected · working' : 'Connected · ready');
+    unread.delete(next.pid);
     $('session').textContent = `${next.sessionName} · ${next.sessionId.slice(0, 8)}`;
     $('directory').textContent = next.cwd;
     $('model').textContent = next.model;
@@ -631,14 +830,21 @@ async function poll() {
     if (changed) wakeInitialized = false;
     if (!wakeSyncing && next.wakeLock) showWakeStatus(next.wakeLock);
     if (!wakeInitialized) void syncWakeLock();
-    if (changed) {
+    if (changed && userSwitch) {
+      // A session the user picked: nothing to warn about, auto-send stays as set.
+      pendingMessage = undefined;
+      cancelRecording();
+    } else if (changed) {
       pendingMessage = undefined;
       $('autosend').checked = false;
       storage.set('autosend', 'false');
       // Do not automatically send a recording into a newly selected session.
       cancelRecording();
       notice('Pi switched sessions. Auto-send is off. Review the connected session before sending.', true);
-    } else if (!wasConnected) notice('Connected. Ready when you are.');
+    } else if (!wasConnected) {
+      notice('Connected. Ready when you are.');
+      void pollSessions();
+    }
     checkNewSession(next);
     if ($('history-dialog').open) renderMessages(next.messages);
   } catch (error) {
@@ -654,6 +860,7 @@ async function poll() {
   } finally {
     polling = false;
     controls();
+    if (stale) void poll();
   }
 }
 async function send() {
@@ -815,13 +1022,15 @@ for (const id of ['autosend', 'engine', 'language']) {
   $(id).addEventListener('change', () => {
     storage.set(id, id === 'autosend' ? String($(id).checked) : $(id).value);
     if (!listening) $('listening').textContent = speechHint();
+    controls();
   });
 }
 $('awake').addEventListener('change', () => { storage.set('awake', String($('awake').checked)); void syncWakeLock(); });
-for (const name of ['history', 'settings']) {
+for (const name of ['sessions', 'history', 'settings']) {
   const dialog = $(`${name}-dialog`);
   $(`open-${name}`).addEventListener('click', () => {
     if (name === 'history') renderMessages(state?.messages || []);
+    if (name === 'sessions') { renderSessions(); void pollSessions(); }
     dialog.showModal();
   });
   $(`close-${name}`).addEventListener('click', () => dialog.close());
@@ -833,7 +1042,13 @@ document.addEventListener('visibilitychange', () => {
   else { cancelRecording(); playback.stop(); }
 });
 window.addEventListener?.('pagehide', () => playback.stop());
-setInterval(() => { if (!document.hidden) void poll(); }, 1500);
+$('sessions-new').addEventListener('click', () => { $('sessions-dialog').close(); void startNewSession(); });
+setInterval(() => {
+  if (document.hidden) return;
+  void poll();
+  // Other sessions change less often; check them every few seconds.
+  if (spawnRequest || $('sessions-dialog').open || ++pollCount % 4 === 0) void pollSessions();
+}, 1500);
 setAttachments([]);
 void poll();
 controls();

@@ -1,30 +1,32 @@
 # Pi Voice: pocket conversation workspace
 
-Reference: Anthropic `frontend-design` skill, read from the official anthropics/skills repository on 2026-07-03. This is a functional phone tool, not a marketing page. No fonts, images or scripts fetched from a CDN.
+Reference: Anthropic `frontend-design` skill (read 2026-07-03); the 1.8 overhaul follows shadcn/ui's design language. This is a functional phone tool, not a marketing page. No fonts, images or scripts fetched from a CDN.
 
-## Plan and review
+## Plan and review (1.8 overhaul)
 
-- **Palette:** ink `#101723`, panel `#192333`, raised `#233148`, quiet text `#b0bed2`, blue `#b1c9ff`, status mint `#94d8bc`. Blue keeps continuity with the existing microphone icon. Mint communicates ready/working state, not decoration.
-- **Type:** Android's native system sans for legible small-screen text; monospace only for code. Reply text 16px with 1.55 line height, titles 18px, controls/metadata 13–15px. No downloaded font or uppercase label system.
-- **Layout:** one bounded viewport with three rows: compact app/status bar; question-and-answer stage; bottom voice composer. Left-align conversation content. Put metadata, speech configuration and older exchanges in separate native modal sheets. Do not put settings before the answer.
-- **Distinctive element:** voice interaction is anchored by the bottom Speak control and an animated three-dot working signal beside the reply heading. No decorative animation or gradient panels.
+- **System:** shadcn/ui-style tokens rather than the library itself. The app is a zero-dependency page served by a Pi extension in Termux; React/Next.js would add a build chain and runtime weight for no user benefit. CSS variables mirror shadcn's roles (background, surface, border, muted, primary, ring, destructive) on Tailwind's gray scale. `--bg` is `#111827`, matching the native shell's root view so the status-bar area blends in. Icons are inline 24px stroke SVGs in the Lucide style.
+- **Accent:** brand blue `#93b4ff` for focus, the π mark, reading and fresh-reply badges. Status colours carry meaning only: emerald ready, amber working (pulsing), red disconnected/recording/stop.
+- **Type:** system sans; reply text 16px/1.6, titles 15–17px, metadata 12–13px. Settings section headings are small uppercase labels, as in shadcn forms.
+- **Layout:** one bounded viewport, three rows. The top bar is a session switcher (status dot, title, folder, count badge) plus three icon buttons with 44px targets. The stage shows the latest question as a right-aligned bubble and Pi's reply below a slim toolbar (π mark, thinking state, Stop or Read aloud icon). The composer is a single rounded card: textarea on top; attach, clear, contextual hint, microphone and Send in one row.
+- **Distinctive element:** voice-first composer. With an empty draft, the microphone is the primary filled button and Send is hidden. Once there is text or an image, Send becomes primary and the microphone steps back. Recording turns the card border and microphone red, with a pulsing ring.
 
 ```
-+ Pi Voice / Ready          History  Settings +
-| You asked                                  |
-| latest question                            |
-| Pi's reply             thinking dots / Stop |
++ ● Session title  ②  ⇕          +   ↺   ⚙  +
+|                      [ latest question  ] |
+| π  ••• Pi is thinking…               ■    |
 |                                            |
 | reply, with Markdown                       |
-| (only this pane scrolls for long replies)   |
+| (only this pane scrolls for long replies)  |
 +--------------------------------------------+
-| editable two-line draft                clear|
-| Speak          listening state         Send |
-| short confirmation / actionable error      |
+| fading status / persistent error           |
+| ╭ Ask Pi anything…                       ╮ |
+| ╰ 📎 ×   hint                     🎤  ↑  ╯ |
 +--------------------------------------------+
 ```
 
-Critique before implementation: a conventional stack of cards pushed the entire conversation below the fold. Simply reducing fonts would make it harder to read without solving that structure. Replace that stack with a viewport workspace, eliminate always-visible metadata and repeated instructional copy, and preserve readable type/touch targets. Keep blue branding rather than changing to a fashionable unrelated palette. Long questions/answers must remain readable: use bounded internal scrolling rather than truncation or falsely promising arbitrary content fits on one screen.
+Critique of 1.7: double top inset in the native WebView (the shell already pads for system bars, and WebView reported safe-area insets as well); text buttons crowding the bar; a composer of three loosely related rows plus two lines of helper text. 1.8 removes the duplicate inset in native mode, folds every control into icon buttons with accessible labels and tooltips, shows helper text only when it says something (listening, auto-send, images), and lets confirmations fade.
+
+**Sessions:** every running Pi has its own bridge. The page's bridge relays authenticated requests to the others by PID, so switching needs no new origin and no APK change. New while busy starts a parallel Pi rather than being disabled. Switching is quiet (no auto-send reset) because the user chose it; an unexpected session change still warns and disables auto-send.
 
 ## Quality constraints
 

@@ -1,5 +1,14 @@
 # Changelog
 
+## 1.8.0 — interface overhaul and parallel sessions
+
+- **Redesigned interface** in a shadcn/ui-style system (Tailwind gray tokens, inline icons, no new dependencies). Compact top bar with session title and status dot; icon-only New, History and Settings buttons with 44px touch targets; chat-style question bubble; icon Stop and Read aloud controls; a single composer card with attach, clear, microphone and an arrow Send button that appears when there is a draft. Status messages fade out unless they are errors. Settings use switches; History, Settings and Sessions open as bottom sheets.
+- **Native top spacing fixed:** the native shell already pads its WebView by the system bars, so the page no longer adds safe-area insets a second time there. No APK update is needed.
+- **Parallel sessions:** New while Pi is busy starts another Pi in the native tmux server and switches to it; the busy one keeps running. A Sessions sheet lists running sessions, flags finished background replies and closes app-started ones. The page keeps one origin: its bridge relays authenticated requests by PID to other loopback bridges. Launchers ignore app-started sessions when choosing which Pi to open.
+- **Regression coverage:** relay/close/summary bridge tests, launch/idempotency/credential-free listing extension tests, launcher selection tests and frontend switching, background-finish, fallback and old-backend tests.
+
+Refresh/reopen the frontend for the new interface. Restart Pi once (after the current response finishes) to enable parallel sessions; older backends keep working without them.
+
 ## 1.7.0 — native APK 0.1.2 (versionCode 3)
 
 - **Optional Read aloud / Stop reading** beside Pi's latest completed reply. Nothing plays automatically, and playback makes no model request or chat submission.

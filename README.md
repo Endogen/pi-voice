@@ -85,11 +85,11 @@ For first installation only, `/reload` followed by `/voice` inside Pi loads the 
 
 ## Using the interface
 
-1. Tap **Speak**, grant microphone permission, speak a short message and pause.
-2. Review/edit the words in the bottom composer, then tap **Send**.
-3. To send each utterance automatically, open **Settings** and enable **Send automatically after speech**. It is off by default because a misheard instruction can cause real actions.
-4. Tap **New** beside History to start a fresh Pi session. Confirm the dialog; the app clears the current view/draft only after the new session is ready. Your previous conversation remains saved in Pi (unless started with `--no-session`, which the dialog warns about). You can resume saved sessions with `/resume` in Pi; the app's History shows only the connected session.
-5. Tap **Read aloud** beside Pi’s completed reply to listen, or **Stop reading** to stop. In **Settings → Voice output**, choose a read-aloud language such as `en-US` or `de-DE`. It never plays automatically.
+1. Tap the **microphone** button, grant microphone permission, speak a short message and pause.
+2. Review/edit the words in the bottom composer, then tap the **arrow** (Send). The arrow appears once there is something to send.
+3. To send each utterance automatically, open **Settings** (sliders icon) and enable **Send automatically after speech**. It is off by default because a misheard instruction can cause real actions.
+4. Tap **+** (New session) in the top bar. While Pi is idle, this replaces the connected session after a confirmation; the app clears the current view/draft only after the new session is ready. Your previous conversation remains saved in Pi (unless started with `--no-session`, which the dialog warns about). **While Pi is still working**, New instead starts a second Pi beside it and switches to it; the busy one keeps running (see [Parallel sessions](#parallel-sessions)).
+5. Tap the **speaker** icon beside Pi’s completed reply to listen; tap the square to stop. In **Settings → Voice output**, choose a read-aloud language such as `en-US` or `de-DE`. It never plays automatically.
 6. For one-tap cold startup, use the **Termux:Widget Pi Voice** icon described above. Chrome's **Add to Home screen** alone cannot start a stopped Pi.
 
 The screen is a compact workspace rather than a long scrolling website:
@@ -97,7 +97,8 @@ The screen is a compact workspace rather than a long scrolling website:
 - Your latest **question and reply** share the main view; the composer remains at the bottom.
 - Animated dots and **Pi is thinking…** indicate generation/tool work. **Sending…** appears immediately while a prompt is submitted; queued follow-ups get a separate label. Reduced-motion users get static dots instead.
 - Short exchanges fit in the available viewport. Arbitrarily long text cannot all fit at once: **long replies scroll inside the reply pane**, and long questions have their own bounded area. Hide the keyboard for more reading space.
-- **History** opens older messages in a separate sheet, still newest-first. **Settings** holds speech, stay-awake and session information rather than pushing replies below the fold.
+- The top bar shows the session's title, a status dot (green ready, amber working, red disconnected) and its folder. Tap it to open **Sessions**. The icon buttons are New session, History and Settings.
+- **History** opens older messages in a bottom sheet, still newest-first. **Settings** holds speech, stay-awake and session information rather than pushing replies below the fold.
 - Unchanged polling does not recreate the answer or reset your reading position. History Markdown is rendered only when its sheet is opened.
 - On a hardware keyboard, **Ctrl+Enter / Cmd+Enter** sends; Enter alone remains a newline.
 
@@ -116,6 +117,15 @@ pi-voice --new -c     # Continue the most recent saved session and open the app
 ```
 
 If several Pi sessions are running, use `/voice` inside the specific session you want. Check its name, working directory and model in **Settings → Connected Pi**.
+
+## Parallel sessions
+
+Tap the session title in the top bar to see every running voice-enabled Pi and switch between them. A number beside the title counts running sessions; it turns blue when a background session finishes a reply. Switching never moves your draft into another conversation silently: the composer stays as typed, and the bridge rejects a prompt addressed to a session that is no longer shown.
+
+- **New while Pi is working** starts another Pi in the same folder, in the background tmux server used by the native app (`tmux -L pi-voice-native`). It needs `tmux` (`pkg install tmux`). Up to 4 sessions can run at once; each uses its own memory and model requests.
+- Sessions started this way show a **×** in the Sessions sheet. Closing one quits that Pi; its conversation stays saved. A Pi you started yourself in a terminal (and the session serving the app window) is never closed from the app.
+- The app keeps one connection: the bridge it was opened from relays requests to the other local bridges (same private token, loopback only). The native APK needs no update for this. Restart Pi once after updating so all bridges support switching.
+- The launchers ignore app-started sessions when picking which Pi to open, so a parallel session never makes startup ambiguous. If you started several Pi processes yourself, they still refuse to guess.
 
 ## Reading Pi’s answer aloud
 

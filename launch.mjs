@@ -48,7 +48,10 @@ if (appMode && args.length !== 1) {
 // Returns false only when there is no running bridge. Ambiguity must never
 // silently choose a conversation or start another Pi.
 async function openExisting() {
-  const live = await discover();
+  const all = await discover();
+  // App-started parallel sessions are reachable from the in-app switcher.
+  const primary = all.filter((item) => !item.spawned);
+  const live = primary.length ? primary : all.slice(0, 1);
   if (live.length > 1) {
     console.error('Several Pi sessions are running. Use /voice inside the desired one:');
     for (const item of live) console.error(`  ${item.sessionId.slice(0, 8)}  ${item.cwd}`);

@@ -1,11 +1,12 @@
 import { randomBytes } from 'node:crypto';
-import { mkdir, readFile, writeFile, chmod, unlink } from 'node:fs/promises';
+import { access, mkdir, readFile, writeFile, chmod, unlink } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { execFile } from 'node:child_process';
 import { createVoiceBridge } from './bridge.mjs';
 import { createWakeLock } from './wake-lock.mjs';
 import { imageLimits } from './image-attachments.mjs';
+import { discoverConnections, readEndpoint } from './discovery.mjs';
 
 export const stateDir = join(process.env.PI_CODING_AGENT_DIR || join(homedir(), '.pi', 'agent'), 'voice');
 
@@ -35,13 +36,34 @@ export function openBrowser(url) {
   });
 }
 
+const maxSessions = 4;
+const spawnId = /^[a-zA-Z0-9-]{8,80}$/.test(process.env.PI_VOICE_SPAWN_ID || '') ? process.env.PI_VOICE_SPAWN_ID : undefined;
+const fail = (status, message) => Object.assign(new Error(message), { status });
+
+// Start another Pi beside this one in the native host's private tmux server.
+// The new Pi publishes its own bridge; the app finds it by its spawn ID.
+export async function launchSession({ id, cwd }) {
+  const tmux = process.env.PREFIX ? join(process.env.PREFIX, 'bin', 'tmux') : 'tmux';
+  const managed = join(homedir(), '.pi', 'agent', 'bin', 'pi');
+  const command = await access(managed).then(() => [managed], () => [process.execPath, process.argv[1]]);
+  const env = [`PI_VOICE_SPAWN_ID=${id}`, ...(process.env.PI_CODING_AGENT_DIR ? [`PI_CODING_AGENT_DIR=${process.env.PI_CODING_AGENT_DIR}`] : [])];
+  const args = ['-L', 'pi-voice-native', 'new-session', '-d', '-s', `pi-voice-${id.slice(0, 8)}`, '-x', '100', '-y', '36', '-c', cwd, ...env.flatMap((item) => ['-e', item]), ...command];
+  await new Promise((resolve, reject) => execFile(tmux, args, { timeout: 10000 }, (error, _stdout, stderr) => {
+    if (!error) return resolve();
+    reject(error.code === 'ENOENT'
+      ? fail(501, 'Parallel sessions need tmux. Install it in Termux with: pkg install tmux')
+      : fail(502, `Could not start a parallel session: ${String(stderr || error.message).trim().slice(0, 200)}`));
+  }));
+}
+
 function textOf(message) {
   if (typeof message.content === 'string') return message.content;
   return (message.content || []).filter((part) => part.type === 'text').map((part) => part.text).join('\n');
 }
 
-export default function installVoiceExtension(pi, { wakeLock = createWakeLock({ directory: join(stateDir, 'wake-lock') }) } = {}) {
+export default function installVoiceExtension(pi, { wakeLock = createWakeLock({ directory: join(stateDir, 'wake-lock') }), launch = launchSession } = {}) {
   let bridge;
+  const spawned = new Set();
   let context;
   let starting;
   let newSessionAction;
@@ -59,6 +81,9 @@ export default function installVoiceExtension(pi, { wakeLock = createWakeLock({ 
       pid: process.pid,
       sessionId: context.sessionManager.getSessionId(),
       sessionName: context.sessionManager.getSessionName() || 'Pi session',
+      title: context.sessionManager.getSessionName() || firstQuestion() || 'New session',
+      spawned: Boolean(spawnId),
+      spawnId,
       sessionPersistent: Boolean(context.sessionManager.getSessionFile()),
       cwd: context.cwd,
       model: context.model ? `${context.model.provider}/${context.model.id}` : 'No model selected',
@@ -71,6 +96,24 @@ export default function installVoiceExtension(pi, { wakeLock = createWakeLock({ 
       messages: readMessages(),
     };
   };
+
+  const firstQuestion = () => {
+    for (const entry of context.sessionManager.getBranch()) {
+      if (entry.type !== 'message' || entry.message.role !== 'user') continue;
+      const text = textOf(entry.message).replace(/\s+/g, ' ').trim();
+      if (text) return text.slice(0, 80);
+    }
+  };
+
+  async function spawnSession(id) {
+    if (spawned.has(id)) return { ok: true, id };
+    const live = await discoverConnections(stateDir);
+    if (live.length >= maxSessions) throw fail(409, `Up to ${maxSessions} sessions can run at once. Close one first.`);
+    spawned.add(id);
+    try { await launch({ id, cwd: context.cwd }); }
+    catch (error) { spawned.delete(id); throw error; }
+    return { ok: true, id };
+  }
 
   const readMessages = () => context.sessionManager.getBranch()
     .filter((entry) => entry.type === 'message' && ['user', 'assistant'].includes(entry.message.role))
@@ -91,6 +134,18 @@ export default function installVoiceExtension(pi, { wakeLock = createWakeLock({ 
       const created = await createVoiceBridge({
         token, port,
         getState: snapshot,
+        listSessions: async () => (await discoverConnections(stateDir)).map(({ url, ...session }) => session),
+        peerOrigin: async (pid) => {
+          const endpoint = await readEndpoint(stateDir, pid);
+          return endpoint?.token === token ? endpoint.origin : undefined;
+        },
+        onSpawn: spawnSession,
+        onClose() {
+          // Only app-started sessions: never quit a Pi the user runs in a terminal.
+          if (!spawnId) throw fail(409, 'Only sessions started from the app can be closed here. Quit this one in Termux.');
+          setImmediate(() => context.shutdown());
+          return { ok: true };
+        },
         onPrompt(text, images = []) {
           if (images.length && !context.model?.input?.includes('image')) {
             throw Object.assign(new Error('Select a vision-capable model before sending images.'), { status: 422 });

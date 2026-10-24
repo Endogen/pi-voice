@@ -78,6 +78,9 @@ test('native discovery ignores stale state PID and never follows redirects with 
 test('native startup refuses ambiguity instead of choosing or starting another Pi', async (t) => {
   assert.equal(chooseConnection([]), undefined);
   assert.throws(() => chooseConnection([{ pid: 1 }, { pid: 2 }]), /Several Pi sessions/);
+  // App-started parallel sessions are reached through the in-app switcher.
+  assert.equal(chooseConnection([{ pid: 3, spawned: true }, { pid: 1 }]).pid, 1);
+  assert.equal(chooseConnection([{ pid: 3, spawned: true }, { pid: 4, spawned: true }]).pid, 3);
   const h = await fixture(t);
   const reused = await runNativeHost({ directory: h.directory, pi: '/never-execute-this' });
   assert.deepEqual(reused, { reused: true });

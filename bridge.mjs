@@ -81,9 +81,37 @@ export function termuxSpeech({ signal, timeout = 45000 } = {}) {
   });
 }
 
+// Relay one authenticated API request to another local Pi bridge sharing this
+// token. The page stays on one origin, so WebView/Chrome need no cross-origin
+// access and the native request policy is unchanged.
+function forward(req, res, origin) {
+  return new Promise((resolve) => {
+    const url = new URL(req.url, origin);
+    const headers = { authorization: req.headers.authorization, host: url.host, 'x-pi-voice-via': 'hub' };
+    for (const name of ['content-type', 'content-length']) if (req.headers[name]) headers[name] = req.headers[name];
+    const upstream = http.request(url, { method: req.method, headers }, (reply) => {
+      res.writeHead(reply.statusCode, { 'Content-Type': reply.headers['content-type'] || 'application/json; charset=utf-8' });
+      reply.pipe(res);
+      reply.once('end', resolve);
+      reply.once('error', () => { res.destroy(); resolve(); });
+    });
+    upstream.once('error', () => {
+      if (!res.headersSent) {
+        res.writeHead(502, { 'Content-Type': 'application/json; charset=utf-8' });
+        res.end(JSON.stringify({ error: 'That session stopped responding. Switch sessions and try again.' }));
+      } else res.destroy();
+      resolve();
+    });
+    // Closing the browser request (e.g. cancelling Android speech) cancels the relay.
+    res.once('close', () => { if (!res.writableFinished) upstream.destroy(); });
+    req.pipe(upstream);
+  });
+}
+
 /** Local-only, authenticated transport. The extension owns the actual Pi session. */
 export async function createVoiceBridge({
-  token, getState, onPrompt, onAbort, onAwake, onNewSession, speech = termuxSpeech, port = 8765,
+  token, getState, onPrompt, onAbort, onAwake, onNewSession, onSpawn, onClose, listSessions, peerOrigin,
+  pid = process.pid, speech = termuxSpeech, port = 8765,
 }) {
   if (!token || token.length < 32) throw new Error('A strong voice bridge token is required.');
   let origin;
@@ -123,8 +151,39 @@ export async function createVoiceBridge({
       }
       if (!path.startsWith('/api/')) throw fail(404, 'Not found.');
       if (!authenticated(req, token)) throw fail(401, 'Open the app using /voice in Pi to connect securely.');
+      const target = req.headers['x-pi-voice-pid'];
+      if (target !== undefined && path !== '/api/sessions') {
+        if (!/^[1-9]\d{0,9}$/.test(target)) throw fail(400, 'Invalid session.');
+        if (Number(target) !== pid) {
+          const peer = peerOrigin && await peerOrigin(Number(target));
+          if (!peer) throw fail(410, 'That session is no longer running.');
+          await forward(req, res, peer);
+          return;
+        }
+      }
       if (req.method === 'GET' && path === '/api/state') {
-        send(200, { ...getState(), listening: Boolean(listener) });
+        const state = { ...getState(), listening: Boolean(listener) };
+        if (new URL(req.url, origin).searchParams.get('summary') !== '1') send(200, state);
+        else {
+          // Lightweight form for the session switcher: no message history.
+          const { messages = [], ...summary } = state;
+          send(200, { ...summary, preview: messages.findLast((message) => message.role === 'user')?.text?.slice(0, 160) || '' });
+        }
+      } else if (req.method === 'GET' && path === '/api/sessions') {
+        if (!listSessions) throw fail(501, 'Session switching is not installed. Restart Pi after updating.');
+        send(200, { self: pid, sessions: await listSessions() });
+      } else if (req.method === 'POST' && path === '/api/session/spawn') {
+        const body = await readJSON(req);
+        if (!body || typeof body.id !== 'string' || !/^[a-zA-Z0-9-]{8,80}$/.test(body.id)) throw fail(400, 'A valid request ID is required.');
+        if (!onSpawn) throw fail(501, 'Parallel sessions are not installed. Restart Pi after updating.');
+        send(202, await onSpawn(body.id));
+      } else if (req.method === 'POST' && path === '/api/session/close') {
+        const body = await readJSON(req);
+        if (!body || typeof body.sessionId !== 'string' || body.sessionId !== getState().sessionId) throw fail(409, 'The Pi session changed. Review it before closing.');
+        // The page is served by this bridge: closing it would strand the app.
+        if (req.headers['x-pi-voice-via'] !== 'hub') throw fail(409, 'This session hosts the app window and stays open. Quit it in Termux instead.');
+        if (!onClose) throw fail(501, 'Closing sessions is not installed. Restart Pi after updating.');
+        send(202, onClose());
       } else if (req.method === 'POST' && path === '/api/prompt') {
         const body = await readJSON(req, imageLimits.maxRequestBytes);
         if (!body || typeof body.text !== 'string' || body.text.length > 16000) {

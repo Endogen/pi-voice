@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, interactive-widget=resizes-content">
-  <meta name="theme-color" content="#101723">
+  <meta name="theme-color" content="#111827">
   <meta name="color-scheme" content="dark">
   <title>Pi Voice</title>
   <link rel="manifest" href="/manifest.webmanifest">
@@ -14,58 +14,75 @@
 <body>
   <main class="workspace">
     <header class="app-bar">
-      <img src="/icon.svg" width="36" height="36" alt="">
-      <div class="app-title"><h1>Pi Voice</h1><p id="connection" role="status">Connecting to Pi…</p></div>
+      <button id="open-sessions" class="session-switch" aria-haspopup="dialog" aria-controls="sessions-dialog" aria-label="Switch session">
+        <span id="status-dot" class="status-dot" aria-hidden="true"></span>
+        <span class="session-text">
+          <span id="session-title" class="session-title">Pi Voice</span>
+          <span id="connection" class="session-sub" role="status">Connecting to Pi…</span>
+        </span>
+        <span id="sessions-badge" class="badge" hidden></span>
+        <svg class="chevron" viewBox="0 0 24 24" aria-hidden="true"><path d="m7 15 5 5 5-5M7 9l5-5 5 5"/></svg>
+      </button>
       <nav aria-label="App controls">
-        <button id="new-session" class="quiet" aria-label="Start a new session" title="New session — finish or stop the current task first" disabled><span id="new-session-label">New</span></button>
-        <button id="open-history" class="quiet" aria-haspopup="dialog" aria-controls="history-dialog">History</button>
-        <button id="open-settings" class="icon-button quiet" aria-label="Open settings" aria-haspopup="dialog" aria-controls="settings-dialog"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h16M4 17h16M8 4v6M16 14v6"/></svg></button>
+        <button id="new-session" class="icon-button" aria-label="New session" title="New session" disabled><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg><span id="new-session-label" class="sr-only">New</span></button>
+        <button id="open-history" class="icon-button" aria-label="History" title="History" aria-haspopup="dialog" aria-controls="history-dialog"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 12a9 9 0 1 0 2.6-6.4L3 8"/><path d="M3 3v5h5M12 7v5l3 2"/></svg></button>
+        <button id="open-settings" class="icon-button" aria-label="Settings" title="Settings" aria-haspopup="dialog" aria-controls="settings-dialog"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 6h9.5M18.5 6H20M4 12h3.5M12.5 12H20M4 18h10.5M19.5 18H20"/><circle cx="16" cy="6" r="2.5"/><circle cx="10" cy="12" r="2.5"/><circle cx="17" cy="18" r="2.5"/></svg></button>
       </nav>
     </header>
 
     <section class="exchange" aria-label="Latest question and answer">
       <section id="question-card" class="question-card" aria-label="Your latest question" hidden>
-        <h2>You asked</h2><div id="latest-question" class="plain-text" tabindex="0"></div>
+        <h2 class="sr-only">You asked</h2><div id="latest-question" class="plain-text" tabindex="0"></div>
       </section>
       <div class="answer-toolbar">
-        <h2 id="answer-heading">Pi’s reply</h2>
+        <h2 id="answer-heading"><span class="pi-mark" aria-hidden="true">π</span><span class="sr-only">Pi’s reply</span></h2>
         <div id="thinking" class="thinking" role="status" aria-live="polite" hidden><span class="thinking-dots" aria-hidden="true"><i></i><i></i><i></i></span><span id="thinking-label">Pi is thinking…</span></div>
-        <button id="abort" class="quiet stop-button" disabled hidden>Stop Pi</button>
-        <button id="read-aloud" class="quiet read-button" aria-pressed="false" title="Read Pi’s latest completed reply aloud" disabled hidden><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m11 5-6 4H2v6h3l6 4V5ZM15 8a6 6 0 0 1 0 8M18 5a10 10 0 0 1 0 14"/></svg><span id="read-label">Read aloud</span></button>
+        <span class="toolbar-spacer"></span>
+        <button id="abort" class="icon-button danger" aria-label="Stop Pi" title="Stop Pi" disabled hidden><svg viewBox="0 0 24 24" aria-hidden="true"><rect class="filled" x="7" y="7" width="10" height="10" rx="2"/><circle cx="12" cy="12" r="10"/></svg></button>
+        <button id="read-aloud" class="icon-button read-button" aria-pressed="false" title="Read aloud" disabled hidden><svg class="when-idle" viewBox="0 0 24 24" aria-hidden="true"><path d="M11 5 6 9H3v6h3l5 4z"/><path d="M15.5 8.5a5 5 0 0 1 0 7M18.5 5.5a9 9 0 0 1 0 13"/></svg><svg class="when-active" viewBox="0 0 24 24" aria-hidden="true"><rect class="filled" x="6" y="6" width="12" height="12" rx="2"/></svg><span id="read-label" class="sr-only">Read aloud</span></button>
       </div>
-      <div id="latest-answer" class="answer-pane empty-answer" tabindex="0" aria-label="Pi’s latest reply" aria-busy="false"><p>Your conversation belongs here.</p><p class="muted">Tap Speak or type a question below.</p></div>
+      <div id="latest-answer" class="answer-pane empty-answer idle-empty" tabindex="0" aria-label="Pi’s latest reply" aria-busy="false">Tap the microphone or type a question below.</div>
     </section>
 
     <section class="composer" aria-label="Write, speak or attach images to your next message">
-      <div id="attachments" class="attachments" aria-label="Selected images" hidden></div>
-      <p id="image-hint" class="image-hint" hidden>Images send only when you tap Send. Remove any private details first.</p>
-      <input id="image-input" type="file" accept="image/jpeg,image/png,image/webp" multiple hidden>
-      <div class="draft-row">
-        <button id="attach" class="icon-button quiet" aria-label="Attach images" aria-controls="image-input" title="Attach up to 4 images (JPEG, PNG, WebP)" disabled><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m8 13 7-7a3 3 0 0 1 4 4L9 20a5 5 0 0 1-7-7L13 2M6 15 16 5"/></svg></button>
-        <label class="sr-only" for="draft">Your message</label>
-        <textarea id="draft" rows="2" maxlength="16000" placeholder="Ask Pi, or tap Speak…"></textarea>
-        <button id="clear" class="icon-button quiet" aria-label="Clear draft and images" title="Clear draft and images">×</button>
-      </div>
-      <div class="compose-actions">
-        <button id="microphone" class="mic" disabled><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="9" y="3" width="6" height="12" rx="3"/><path d="M5 10v2a7 7 0 0 0 14 0v-2M12 19v3M8 22h8"/></svg><span id="microphone-label">Speak</span></button>
-        <p id="listening" role="status">Review, then send</p>
-        <button id="send" disabled>Send<svg viewBox="0 0 24 24" aria-hidden="true"><path d="m5 12 7-7 7 7M12 5v15"/></svg></button>
-      </div>
       <p id="notice" role="status" aria-live="polite" tabindex="0">Open this app with /voice in Pi.</p>
+      <div id="prompt-box" class="prompt-box">
+        <div id="attachments" class="attachments" aria-label="Selected images" hidden></div>
+        <p id="image-hint" class="image-hint" hidden>Images send only when you tap Send. Remove any private details first.</p>
+        <input id="image-input" type="file" accept="image/jpeg,image/png,image/webp" multiple hidden>
+        <label class="sr-only" for="draft">Your message</label>
+        <textarea id="draft" rows="2" maxlength="16000" placeholder="Ask Pi anything…"></textarea>
+        <div class="prompt-toolbar">
+          <button id="attach" class="icon-button" aria-label="Attach images" aria-controls="image-input" title="Attach up to 4 images (JPEG, PNG, WebP)" disabled><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m16 6-8.4 8.4a2 2 0 0 0 2.8 2.8l8.4-8.4a4 4 0 0 0-5.6-5.6L4.8 11.6a6 6 0 0 0 8.5 8.5L20 13.4"/></svg></button>
+          <button id="clear" class="icon-button" aria-label="Clear draft and images" title="Clear draft and images" hidden><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M18 6 6 18M6 6l12 12"/></svg></button>
+          <span id="listening" class="compose-hint" role="status">Review, then send</span>
+          <button id="microphone" class="round-button mic" aria-label="Speak" title="Speak" disabled><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="9" y="2.5" width="6" height="12" rx="3"/><path d="M5 10.5v1a7 7 0 0 0 14 0v-1M12 18.5v3"/></svg><span id="microphone-label" class="sr-only">Speak</span></button>
+          <button id="send" class="round-button send" aria-label="Send" title="Send (Ctrl+Enter)" disabled><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 19V5M5.5 11.5 12 5l6.5 6.5"/></svg></button>
+        </div>
+      </div>
     </section>
   </main>
 
-  <dialog id="history-dialog" aria-labelledby="history-title">
-    <div class="sheet-header"><h2 id="history-title">Conversation history</h2><button id="close-history" class="icon-button quiet" aria-label="Close history">×</button></div>
+  <dialog id="sessions-dialog" class="sheet" aria-labelledby="sessions-title">
+    <div class="sheet-header"><h2 id="sessions-title">Sessions</h2><button id="close-sessions" class="icon-button" aria-label="Close sessions"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M18 6 6 18M6 6l12 12"/></svg></button></div>
+    <div class="sheet-body">
+      <div id="session-list" class="session-list" role="list"></div>
+      <button id="sessions-new" class="wide-button"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg>New session</button>
+      <p id="sessions-hint" class="hint">A new session started while Pi is working runs alongside it. Up to 4 sessions can run at once; each stays saved in Pi.</p>
+    </div>
+  </dialog>
+
+  <dialog id="history-dialog" class="sheet" aria-labelledby="history-title">
+    <div class="sheet-header"><h2 id="history-title">History</h2><button id="close-history" class="icon-button" aria-label="Close history"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M18 6 6 18M6 6l12 12"/></svg></button></div>
     <div class="sheet-body"><p class="hint">Newest messages first. Tool output stays in Termux.</p><div id="messages"></div></div>
   </dialog>
 
-  <dialog id="settings-dialog" aria-labelledby="settings-title">
-    <div class="sheet-header"><h2 id="settings-title">Settings</h2><button id="close-settings" class="icon-button quiet" aria-label="Close settings">×</button></div>
+  <dialog id="settings-dialog" class="sheet" aria-labelledby="settings-title">
+    <div class="sheet-header"><h2 id="settings-title">Settings</h2><button id="close-settings" class="icon-button" aria-label="Close settings"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M18 6 6 18M6 6l12 12"/></svg></button></div>
     <div class="sheet-body settings-body">
       <section class="settings-section" aria-label="Speech settings">
         <h3>Voice input</h3>
-        <label class="check"><input type="checkbox" id="autosend"> Send automatically after speech</label>
+        <label class="switch"><span>Send automatically after speech</span><input type="checkbox" id="autosend" role="switch"></label>
         <p class="hint">Off by default, so you can review the transcript first.</p>
         <label for="engine">Speech engine</label>
         <select id="engine"><option id="speech-primary" value="browser">Browser speech (recommended)</option><option value="termux">Android via Termux:API (fallback)</option></select>
@@ -82,7 +99,7 @@
       </section>
       <section class="settings-section" aria-label="Background operation">
         <h3>Keep Pi available</h3>
-        <label class="check"><input type="checkbox" id="awake" checked> Keep Termux awake</label>
+        <label class="switch"><span>Keep Termux awake</span><input type="checkbox" id="awake" role="switch" checked></label>
         <p id="wake-status" class="hint" role="status">Checking stay-awake support…</p>
         <p class="hint">Prevents CPU sleep, not Android force-closing. Uses more battery. In Android, set Termux battery use to <strong>Unrestricted</strong> / allow background activity. The display may still sleep. Termux’s wake lock is shared across its sessions.</p>
       </section>

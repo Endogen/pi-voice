@@ -17,12 +17,14 @@ function harness(mode = 'rpc', options = {}) {
   const sent = [];
   let busy = false;
   let aborts = 0;
+  let shutdowns = 0;
   const branch = [{ type: 'message', id: 'one', message: { role: 'user', content: [{ type: 'text', text: 'Existing session' }] } }];
   const ctx = {
     mode, cwd: '/test/project', model: { provider: 'test', id: 'test-model', input: ['text', 'image'] },
     isIdle: () => !busy, hasPendingMessages: () => busy,
     abort: () => { aborts++; },
     ui: { notify() {}, setStatus() {} },
+    shutdown: () => { shutdowns++; },
     sessionManager: { getSessionFile: () => '/test/session.jsonl', getSessionId: () => 'test-session', getSessionName: () => 'Test session', getBranch: () => branch },
   };
   install({
@@ -31,7 +33,7 @@ function harness(mode = 'rpc', options = {}) {
     registerCommand: (name, command) => commands.set(name, command),
     sendUserMessage: (text, options) => { sent.push({ text, options }); },
   }, options);
-  return { events, commands, ctx, branch, sent, busy: (value) => { busy = value; }, aborts: () => aborts };
+  return { events, commands, ctx, branch, sent, busy: (value) => { busy = value; }, aborts: () => aborts, shutdowns: () => shutdowns };
 }
 async function endpoint() {
   const names = await readdir(join(stateDir, 'endpoints'));
@@ -227,4 +229,43 @@ test('extension exposes wake-lock state, responds to app controls and releases i
   assert.equal(active, false);
   assert.deepEqual(calls, [true, false, true, false, true, 'close']);
   assert.deepEqual(await readdir(join(stateDir, 'endpoints')), []);
+});
+
+test('parallel sessions are launched once per request, listed without credentials and never close a user-run Pi', async (t) => {
+  const launched = [];
+  const h = harness('rpc', { launch: async (options) => { launched.push(options); } });
+  await h.events.get('session_start')({ reason: 'startup' }, h.ctx);
+  t.after(() => h.events.get('session_shutdown')({ reason: 'quit' }, h.ctx));
+  const ep = await endpoint();
+  const request = (path, body, headers = {}) => fetch(`${ep.origin}/api/${path}`, {
+    method: body ? 'POST' : 'GET', headers: { Authorization: `Bearer ${ep.token}`, 'Content-Type': 'application/json', ...headers },
+    body: body ? JSON.stringify(body) : undefined,
+  });
+  const state = await (await request('state')).json();
+  assert.deepEqual([state.title, state.spawned], ['Test session', false]);
+  assert.equal((await request('session/spawn', { id: 'spawn-request-1' })).status, 202);
+  assert.equal((await request('session/spawn', { id: 'spawn-request-1' })).status, 202);
+  assert.deepEqual(launched, [{ id: 'spawn-request-1', cwd: '/test/project' }], 'A retried request does not start a second Pi');
+  const listed = await (await request('sessions')).json();
+  assert.equal(listed.self, process.pid);
+  assert.deepEqual(listed.sessions.map((item) => [item.pid, item.title, item.spawned]), [[process.pid, 'Test session', false]]);
+  assert.equal(JSON.stringify(listed).includes(ep.token), false, 'The session list never exposes the bridge token');
+  assert.equal((await request('session/close', { sessionId: 'test-session' }, { 'X-Pi-Voice-Via': 'hub' })).status, 409);
+  assert.equal(h.shutdowns(), 0);
+});
+
+test('a failed launch reports its reason and can be retried', async (t) => {
+  let attempts = 0;
+  const h = harness('rpc', { launch: async () => { attempts++; throw Object.assign(new Error('Parallel sessions need tmux.'), { status: 501 }); } });
+  await h.events.get('session_start')({ reason: 'startup' }, h.ctx);
+  t.after(() => h.events.get('session_shutdown')({ reason: 'quit' }, h.ctx));
+  const ep = await endpoint();
+  const spawn = () => fetch(`${ep.origin}/api/session/spawn`, {
+    method: 'POST', headers: { Authorization: `Bearer ${ep.token}`, 'Content-Type': 'application/json' }, body: JSON.stringify({ id: 'spawn-request-2' }),
+  });
+  const response = await spawn();
+  assert.equal(response.status, 501);
+  assert.match((await response.json()).error, /tmux/);
+  await spawn();
+  assert.equal(attempts, 2);
 });

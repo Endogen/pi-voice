@@ -42,7 +42,7 @@ async function setup({ auto = false, speech = true, awake = true, confirmed = tr
   class Utterance { constructor(text) { this.text = text; } }
   const synthesis = { cancellations: 0, speak: (utterance) => utterances.push(utterance), cancel() { this.cancellations++; } };
   const values = new Map([['pi-voice-autosend', String(auto)], ['pi-voice-awake', String(awake)]]);
-  const state = { sessionId: 'session-one', sessionName: 'Test', cwd: '/project', model: 'test/test', busy: false, messages: [], imageAttachments: true, modelSupportsImages: true };
+  const state = { pid: 100, sessionId: 'session-one', sessionName: 'Test', cwd: '/project', model: 'test/test', busy: false, messages: [], imageAttachments: true, modelSupportsImages: true };
   const imageProcessing = {
     calls: [], encoded: [], closed: 0,
     async decode(file) { return { width: file.width || 4000, height: file.height || 3000, close() { imageProcessing.closed++; } }; },
@@ -58,8 +58,12 @@ async function setup({ auto = false, speech = true, awake = true, confirmed = tr
   }
   const requests = [];
   const confirmations = [];
+  const sessions = [{ pid: 100, sessionId: 'session-one', title: 'Test', cwd: '/project', busy: false, spawned: false }];
   const network = {
     state: () => Response.json(state),
+    sessions: () => Response.json({ self: 100, sessions }),
+    spawn: () => Response.json({ ok: true }, { status: 202 }),
+    close: () => Response.json({ ok: true }, { status: 202 }),
     prompt: () => Response.json({ ok: true, queued: false }),
     newSession: () => Response.json({ ok: true }, { status: 202 }),
     listen: () => Response.json({ text: 'fallback transcript' }),
@@ -96,8 +100,12 @@ async function setup({ auto = false, speech = true, awake = true, confirmed = tr
     confirm: (message) => { confirmations.push(message); return confirmed; },
     async fetch(path, options) {
       const body = options.body ? JSON.parse(options.body) : undefined;
-      requests.push({ path, body });
-      if (path === '/api/state') return network.state();
+      const pid = options.headers['X-Pi-Voice-Pid'];
+      requests.push({ path, body, pid });
+      if (path === '/api/state') return network.state(pid);
+      if (path === '/api/sessions') return network.sessions();
+      if (path === '/api/session/spawn') return network.spawn(body);
+      if (path === '/api/session/close') return network.close(body, pid);
       if (path === '/api/prompt') { prompts.push(body); return network.prompt(body); }
       if (path === '/api/session/new') return network.newSession(body);
       if (path === '/api/awake') return network.awake(body);
@@ -109,7 +117,7 @@ async function setup({ auto = false, speech = true, awake = true, confirmed = tr
   });
   vm.runInContext(source, context);
   await flush();
-  return { elements, prompts, instances, nativeCalls, state, context, document, values, network, requests, confirmations, imageProcessing, utterances, synthesis, el: (id) => elements.get(id) };
+  return { elements, prompts, instances, nativeCalls, state, sessions, context, document, values, network, requests, confirmations, imageProcessing, utterances, synthesis, el: (id) => elements.get(id) };
 }
 function result(text, final = true) {
   return { results: [Object.assign([{ transcript: text }], { isFinal: final })] };
@@ -477,7 +485,7 @@ test('New session confirms, submits only once and clears the draft/history only 
   assert.equal(h.el('autosend').checked, false);
   assert.equal(h.values.get('pi-voice-autosend'), 'false');
   assert.equal(h.el('question-card').hidden, true);
-  assert.equal(h.el('latest-answer').textContent, 'Tap Speak or type a question below.');
+  assert.equal(h.el('latest-answer').textContent, 'Tap the microphone or type a question below.');
   assert.deepEqual(h.el('messages').children, []);
   assert.match(h.el('notice').textContent, /New session ready/);
   assert.equal(h.requests.filter((r) => r.path === '/api/awake').length, 2, 'New runtime must receive the saved stay-awake preference');
@@ -506,20 +514,96 @@ test('New session warns when the old conversation is ephemeral rather than claim
   assert.match(h.el('notice').textContent, /was not saved/);
 });
 
-test('New session is unavailable while Pi is busy, a follow-up is queued or speech is recording', async () => {
+test('New stays available while Pi is busy but never while speech is recording', async () => {
   const h = await setup();
   for (const key of ['busy', 'pending']) {
     h.state[key] = true;
     await vm.runInContext('poll()', h.context);
-    assert.equal(h.el('new-session').disabled, true);
-    await vm.runInContext('startNewSession()', h.context);
+    assert.equal(h.el('new-session').disabled, false, 'A busy Pi gets a parallel session instead');
     h.state[key] = false;
   }
   await vm.runInContext('poll()', h.context);
   h.el('microphone').listeners.click();
   assert.equal(h.el('new-session').disabled, true);
   await vm.runInContext('startNewSession()', h.context);
+  assert.equal(h.requests.some((r) => ['/api/session/new', '/api/session/spawn'].includes(r.path)), false);
+});
+
+test('New while Pi is busy starts a parallel session and switches to it without replacing the busy one', async () => {
+  const h = await setup({ auto: true });
+  h.state.busy = true;
+  await vm.runInContext('poll()', h.context);
+  await vm.runInContext('startNewSession()', h.context);
+  assert.match(h.confirmations.at(-1), /keeps running/);
+  const spawn = h.requests.find((r) => r.path === '/api/session/spawn');
+  assert.ok(spawn, 'The busy session is not replaced');
   assert.equal(h.requests.some((r) => r.path === '/api/session/new'), false);
+  assert.equal(h.el('new-session').disabled, true, 'A second New waits for the first parallel session');
+  h.sessions.push({ pid: 200, sessionId: 'session-two', title: 'New session', cwd: '/project', busy: false, spawned: true, spawnId: spawn.body.id });
+  h.network.state = (pid) => Response.json(pid === '200' ? { ...h.state, pid: 200, sessionId: 'session-two', busy: false, title: 'New session' } : h.state);
+  await vm.runInContext('pollSessions()', h.context);
+  await flush();
+  assert.equal(h.requests.at(-1).pid, '200', 'Later requests go to the new Pi through this bridge');
+  assert.equal(h.el('session-title').textContent, 'New session');
+  assert.match(h.el('notice').textContent, /previous one keeps running/);
+  assert.equal(h.el('autosend').checked, true, 'A switch the user asked for does not reset auto-send');
+  assert.equal(h.values.get('pi-voice-session-pid'), '200');
+  h.el('draft').value = 'question for the new session';
+  await vm.runInContext('send()', h.context);
+  assert.equal(h.prompts.at(-1).sessionId, 'session-two');
+  assert.equal(h.requests.find((r) => r.path === '/api/prompt').pid, '200');
+});
+
+test('a background session that finishes is flagged, and switching back clears the flag', async () => {
+  const h = await setup();
+  h.sessions.push({ pid: 200, sessionId: 'session-two', title: 'Background', cwd: '/project', busy: true, spawned: true });
+  await vm.runInContext('pollSessions()', h.context);
+  assert.equal(h.el('sessions-badge').hidden, false);
+  assert.equal(h.el('sessions-badge').textContent, '2');
+  h.sessions[1].busy = false;
+  await vm.runInContext('pollSessions()', h.context);
+  assert.equal(h.el('sessions-badge').classes.has('unread'), true);
+  h.el('open-sessions').click();
+  const rows = h.el('session-list').children;
+  assert.equal(rows.length, 2);
+  assert.equal(rows[0].children.length, 1, 'The session hosting this page cannot be closed from it');
+  assert.equal(rows[1].children.length, 2, 'App-started sessions can be closed');
+  h.network.state = (pid) => Response.json(pid === '200' ? { ...h.state, pid: 200, sessionId: 'session-two' } : h.state);
+  rows[1].children[0].listeners.click();
+  await flush();
+  assert.equal(h.el('sessions-dialog').open, false);
+  assert.equal(h.el('sessions-badge').classes.has('unread'), false);
+  assert.doesNotMatch(h.el('notice').textContent || '', /Pi switched sessions/);
+});
+
+test('closing a parallel session targets that Pi and a vanished session falls back to the main one', async () => {
+  const h = await setup();
+  h.sessions.push({ pid: 200, sessionId: 'session-two', title: 'Background', cwd: '/project', busy: true, spawned: true });
+  await vm.runInContext('pollSessions()', h.context);
+  h.el('open-sessions').click();
+  await h.el('session-list').children[1].children[1].listeners.click();
+  assert.match(h.confirmations.at(-1), /still working/);
+  const close = h.requests.find((r) => r.path === '/api/session/close');
+  assert.deepEqual([close.pid, close.body.sessionId], ['200', 'session-two']);
+
+  h.network.state = (pid) => pid === '300' ? Response.json({ error: 'That session is no longer running.' }, { status: 410 }) : Response.json(h.state);
+  await vm.runInContext('selectTarget(300); poll()', h.context);
+  await flush();
+  assert.match(h.el('notice').textContent, /has ended/);
+  assert.equal(h.requests.at(-1).pid, undefined);
+  assert.equal(h.el('session-title').textContent, 'Test');
+});
+
+test('older backends without session switching keep working', async () => {
+  const h = await setup();
+  h.network.sessions = () => Response.json({ error: 'Not found.' }, { status: 404 });
+  await vm.runInContext('pollSessions()', h.context);
+  h.el('open-sessions').click();
+  assert.match(h.el('sessions-hint').textContent, /Restart Pi once/);
+  h.state.busy = true;
+  await vm.runInContext('poll()', h.context);
+  await vm.runInContext('startNewSession()', h.context);
+  assert.match(h.el('notice').textContent, /Restart Pi once to run sessions in parallel/);
 });
 
 test('unsupported backend or Pi cancellation keeps the draft and re-enables New session', async () => {
@@ -698,11 +782,11 @@ test('shows newest messages first without mutating session order or forcing scro
   assert.match(articles[2].children[1].innerHTML, /First answer/);
   assert.equal(articles[3].children[1].textContent, 'First question');
   assert.equal(h.state.messages[0].text, 'First question');
-  assert.equal(h.el('connection').textContent, 'Connected · ready');
+  assert.equal(h.el('connection').textContent, 'Ready · project');
   h.state.messages.push({ role: 'assistant', text: '**New reply**' });
   await vm.runInContext('poll()', h.context);
   assert.match(h.el('messages').children[0].children[1].innerHTML, /<strong>New reply<\/strong>/);
-  assert.equal(h.el('connection').textContent, 'Connected · ready');
+  assert.equal(h.el('connection').textContent, 'Ready · project');
   const unchanged = h.el('messages').children;
   await vm.runInContext('poll()', h.context);
   assert.equal(h.el('messages').children, unchanged, 'unchanged polling should not rebuild the DOM');
@@ -747,7 +831,7 @@ test('falls back to plain text if Markdown rendering fails without disconnecting
   assert.equal(textElement.className, 'message-body plain-text');
   assert.equal(textElement.textContent, '<strong>Still visible</strong>');
   assert.equal(textElement.innerHTML, undefined);
-  assert.equal(h.el('connection').textContent, 'Connected · ready');
+  assert.equal(h.el('connection').textContent, 'Ready · project');
 });
 
 test('focus view shows only the latest question and its answer without opening history', async () => {
@@ -939,5 +1023,5 @@ test('older backend stay-awake error explains a restart without breaking the con
   h.el('awake').listeners.change();
   await flush();
   assert.match(h.el('wake-status').textContent, /Restart Pi once/);
-  assert.equal(h.el('connection').textContent, 'Connected · ready');
+  assert.equal(h.el('connection').textContent, 'Ready · project');
 });
