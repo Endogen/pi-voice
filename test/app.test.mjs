@@ -24,7 +24,7 @@ class Element {
   click() { this.clicked = (this.clicked || 0) + 1; return this.listeners.click?.(); }
   scrollIntoView() { throw new Error('Conversation updates must not force-scroll.'); }
 }
-async function setup({ auto = false, speech = true, awake = true, confirmed = true, native = false, playback = false, nativePlayback = true, nativeTerminal = true } = {}) {
+async function setup({ auto = false, speech = true, awake = true, confirmed = true, native = false, playback = false, nativePlayback = true, nativeTerminal = true, nativeReconnect = true } = {}) {
   const elements = new Map();
   const prompts = [];
   const instances = [];
@@ -38,6 +38,7 @@ async function setup({ auto = false, speech = true, awake = true, confirmed = tr
       stopReading: (id) => nativeCalls.push({ method: 'stop-reading', id }),
     } : {}),
     ...(nativeTerminal ? { openTerminal: (session) => nativeCalls.push({ method: 'terminal', session }) } : {}),
+    ...(nativeReconnect ? { reconnect: () => nativeCalls.push({ method: 'reconnect' }) } : {}),
   } : undefined;
   const utterances = [];
   class Utterance { constructor(text) { this.text = text; } }
@@ -59,10 +60,11 @@ async function setup({ auto = false, speech = true, awake = true, confirmed = tr
   }
   const requests = [];
   const confirmations = [];
+  const stopped = [];
   const sessions = [{ pid: 100, sessionId: 'session-one', title: 'Test', cwd: '/project', busy: false, spawned: false }];
   const network = {
     state: () => Response.json(state),
-    sessions: () => Response.json({ self: 100, sessions }),
+    sessions: () => Response.json({ self: 100, sessions, stopped }),
     activity: () => Response.json({ version: 1, steps: [], terminal: {} }),
     spawn: () => Response.json({ ok: true }, { status: 202 }),
     close: () => Response.json({ ok: true }, { status: 202 }),
@@ -109,6 +111,8 @@ async function setup({ auto = false, speech = true, awake = true, confirmed = tr
       if (path === '/api/activity') return network.activity(pid);
       if (path === '/api/session/spawn') return network.spawn(body);
       if (path === '/api/session/close') return network.close(body, pid);
+      if (path === '/api/session/restore') return Response.json({ ok: true, id: body.id }, { status: 202 });
+      if (path === '/api/session/forget') return Response.json({ ok: true });
       if (path === '/api/prompt') { prompts.push(body); return network.prompt(body); }
       if (path === '/api/session/new') return network.newSession(body);
       if (path === '/api/awake') return network.awake(body);
@@ -120,7 +124,7 @@ async function setup({ auto = false, speech = true, awake = true, confirmed = tr
   });
   vm.runInContext(source, context);
   await flush();
-  return { elements, prompts, instances, nativeCalls, state, sessions, context, document, values, network, requests, confirmations, imageProcessing, utterances, synthesis, el: (id) => elements.get(id) };
+  return { elements, prompts, instances, nativeCalls, state, sessions, stopped, context, document, values, network, requests, confirmations, imageProcessing, utterances, synthesis, el: (id) => elements.get(id) };
 }
 function result(text, final = true) {
   return { results: [Object.assign([{ transcript: text }], { isFinal: final })] };
@@ -654,13 +658,65 @@ test('New session timeout never clears an unconfirmed draft', async () => {
   assert.equal(h.el('new-session').disabled, false);
 });
 
-test('disconnected app points to the native launcher rather than promising browser-only startup', async () => {
-  const h = await setup();
+test('a stopped Pi offers Reconnect, and returning to the app reconnects once by itself', async () => {
+  const h = await setup({ native: true });
+  assert.equal(h.el('reconnect').hidden, true, 'Nothing to reconnect while Pi answers');
   h.network.state = () => { throw new Error('Server stopped'); };
   await vm.runInContext('poll()', h.context);
   assert.equal(h.el('connection').textContent, 'Disconnected');
-  assert.match(h.el('notice').textContent, /Termux:Widget Pi Voice icon/);
-  assert.match(h.el('notice').textContent, /Chrome-only shortcut cannot start Pi/);
+  assert.match(h.el('notice').textContent, /Tap Reconnect/);
+  assert.equal(h.el('reconnect').hidden, false);
+  assert.equal(h.nativeCalls.some((call) => call.method === 'reconnect'), false, 'Polling alone never restarts Pi');
+  h.el('reconnect').click();
+  assert.equal(h.nativeCalls.filter((call) => call.method === 'reconnect').length, 1);
+  h.document.listeners.visibilitychange();
+  await flush();
+  await vm.runInContext('poll()', h.context);
+  assert.equal(h.nativeCalls.filter((call) => call.method === 'reconnect').length, 2, 'One automatic attempt after returning');
+  await vm.runInContext('poll()', h.context);
+  assert.equal(h.nativeCalls.filter((call) => call.method === 'reconnect').length, 2, 'No retry loop');
+});
+
+test('without a reconnect-capable native shell the app explains how to restart Pi', async () => {
+  const old = await setup({ native: true, nativeReconnect: false });
+  old.network.state = () => { throw new Error('Server stopped'); };
+  await vm.runInContext('poll()', old.context);
+  assert.match(old.el('notice').textContent, /Update Pi Voice Native/);
+  assert.equal(old.el('reconnect').hidden, true);
+  const page = await setup();
+  page.network.state = () => { throw new Error('Server stopped'); };
+  await vm.runInContext('poll()', page.context);
+  assert.match(page.el('notice').textContent, /Open Pi Voice Native/);
+});
+
+test('sessions that stopped earlier can be restored or dismissed by PID only', async () => {
+  const h = await setup();
+  h.stopped.push({ pid: 4321, title: 'Refactor bridge', cwd: '/project', updated: Date.now() - 2 * 3600000 });
+  await vm.runInContext('pollSessions()', h.context);
+  assert.equal(h.el('restore-banner').hidden, false);
+  assert.equal(h.el('restore-label').textContent, '1 earlier session stopped · Restore');
+  h.el('restore-banner').click();
+  assert.equal(h.el('sessions-dialog').open, true);
+  const [row] = h.el('stopped-list').children;
+  assert.match(row.children[0].children[1].children[1].textContent, /Stopped · 2 h ago · project/);
+  await row.children[1].listeners.click();
+  const restore = h.requests.find((r) => r.path === '/api/session/restore');
+  assert.deepEqual(Object.keys(restore.body).sort(), ['id', 'pid'], 'No paths are sent from the page');
+  assert.equal(restore.body.pid, 4321);
+  h.stopped.length = 0;
+  h.sessions.push({ pid: 500, sessionId: 'restored', title: 'Refactor bridge', cwd: '/project', spawned: true, spawnId: restore.body.id });
+  h.network.state = (pid) => Response.json(pid === '500' ? { ...h.state, pid: 500, sessionId: 'restored' } : h.state);
+  await vm.runInContext('pollSessions()', h.context);
+  await flush();
+  assert.equal(h.requests.at(-1).pid, '500');
+  assert.match(h.el('notice').textContent, /Session restored/);
+  assert.equal(h.el('restore-banner').hidden, true);
+  h.stopped.push({ pid: 9876, title: 'Old', cwd: '/x', updated: Date.now() });
+  await vm.runInContext('pollSessions()', h.context);
+  vm.runInContext('renderSessions()', h.context);
+  await h.el('stopped-list').children[0].children[2].listeners.click();
+  assert.equal(h.requests.at(-1).path, '/api/session/forget');
+  assert.equal(h.requests.at(-1).body.pid, 9876);
 });
 
 test('speech is user-initiated and review-before-send is the default', async () => {
@@ -750,13 +806,6 @@ test('backgrounding Termux fallback aborts recording and never auto-sends a late
   assert.equal(h.requests.filter((r) => r.path === '/api/listen/cancel').length, 0, 'Cancel only this request, never another tab’s recognizer');
   assert.equal(h.el('draft').value, 'keep this draft');
   assert.match(h.el('notice').textContent, /cancelled/);
-});
-
-test('native reconnect errors point to the native icon, not a Chrome-only workflow', async () => {
-  const h = await setup({ native: true });
-  h.network.state = () => { throw new Error('Server stopped'); };
-  await vm.runInContext('poll()', h.context);
-  assert.match(h.el('notice').textContent, /Pi Voice Native/);
 });
 
 test('Stop Pi sends the displayed session ID rather than a sessionless abort', async () => {
@@ -967,11 +1016,9 @@ test('stored stay-awake opt-out is respected when opening the app', async () => 
 
 test('native speech uses Android rather than Web Speech, supports partial/final results and ignores duplicate callbacks', async () => {
   const h = await setup({ native: true, auto: true });
-  assert.equal(h.el('speech-primary').textContent, 'Android speech (native)');
-  assert.match(h.el('home-launch-hint').textContent, /existing Pi Voice shortcut still works/);
   h.el('microphone').click();
   await flush();
-  assert.equal(h.instances.length, 0, 'Native never invokes Chrome Web Speech');
+  assert.equal(h.instances.length, 0, 'Native never invokes Web Speech');
   const call = h.nativeCalls[0];
   assert.equal(call.method, 'start');
   assert.equal(call.lang, 'en-US');
@@ -1008,7 +1055,7 @@ test('native speech Stop waits for final text; interrupted recording never auto-
   assert.match(h.el('notice').textContent, /cancelled/);
 });
 
-test('native microphone permission errors name the native app, not Chrome', async () => {
+test('native microphone permission errors name the native app', async () => {
   const h = await setup({ native: true });
   h.el('microphone').click();
   await flush();
@@ -1088,20 +1135,15 @@ test('Open in Termux attaches the native tmux session after a one-time warning',
   assert.equal(h.nativeCalls.at(-1).session, '', 'Unexpected names only open Termux');
 });
 
-test('old native shells and Chrome explain how to reach the terminal instead', async () => {
+test('old native shells and plain browsers explain how to reach the terminal instead', async () => {
   const old = await setup({ native: true, nativeTerminal: false });
   vm.runInContext('renderActivity()', old.context);
   assert.equal(old.el('open-terminal').disabled, true);
   assert.match(old.el('terminal-hint').textContent, /APK 0\.1\.3/);
-  const chrome = await setup();
-  vm.runInContext('renderActivity()', chrome.context);
-  assert.equal(chrome.el('open-terminal').hidden, true);
-  assert.match(chrome.el('terminal-hint').textContent, /Switch to the Termux tab/);
-  chrome.state.terminal = { session: 'pi-voice' };
-  await vm.runInContext('poll(); renderActivity()', chrome.context);
-  await flush();
-  assert.equal(chrome.el('open-terminal-label').textContent, 'Copy Termux command');
-  chrome.el('open-terminal').click();
-  await flush();
-  assert.equal(chrome.el('open-terminal-label').textContent, 'tmux -L pi-voice-native attach -t pi-voice', 'Without a clipboard the command is shown');
+  const page = await setup();
+  page.state.terminal = { session: 'pi-voice' };
+  await vm.runInContext('poll()', page.context);
+  vm.runInContext('renderActivity()', page.context);
+  assert.equal(page.el('open-terminal').hidden, true);
+  assert.match(page.el('terminal-hint').textContent, /Pi Voice Native/);
 });

@@ -6,13 +6,24 @@ import { pathToFileURL } from 'node:url';
 import { setTimeout as delay } from 'node:timers/promises';
 import { chooseConnection, discoverConnections } from './connection.mjs';
 import { stateDir } from '../extension.mjs';
+import { removeRecord, stoppedRecords } from '../running.mjs';
 
 const exec = promisify(execFile);
+
+// Resume the conversation the app last had open, in its own folder, if Pi
+// stopped (phone off, Android killed Termux). Otherwise continue the most
+// recent session in the home folder. Parallel sessions are restored from the app.
+export async function launchPlan({ directory = stateDir, cwd = homedir(), args, isAlive } = {}) {
+  if (args) return { cwd, args, stale: [] };
+  const stale = (await stoppedRecords(directory, isAlive ? { isAlive } : undefined)).filter((record) => !record.spawned);
+  const resume = stale[0];
+  return { cwd: resume?.cwd || cwd, args: resume ? ['--session', resume.sessionFile] : ['-c'], stale };
+}
 
 // host.sh holds the SAME kernel lock as the existing launcher. This process is
 // kept registered as a Termux background task for the entire PTY's lifetime;
 // detaching tmux and immediately exiting would leave an untracked orphan.
-export async function runNativeHost({ directory = stateDir, socket = 'pi-voice-native', session = 'pi-voice', cwd = homedir(), pi = join(homedir(), '.pi/agent/bin/pi'), args = ['-c'], env = process.env, interval = 5000 } = {}) {
+export async function runNativeHost({ directory = stateDir, socket = 'pi-voice-native', session = 'pi-voice', cwd = homedir(), pi = join(homedir(), '.pi/agent/bin/pi'), args, env = process.env, interval = 5000 } = {}) {
   const existing = chooseConnection(await discoverConnections(directory));
   if (existing) return { reused: true };
   const tmux = join(process.env.PREFIX || '/data/data/com.termux/files/usr', 'bin/tmux');
@@ -21,7 +32,10 @@ export async function runNativeHost({ directory = stateDir, socket = 'pi-voice-n
   // bridge is temporarily stopped or still starting up.
   let present = await command('has-session', '-t', `=${session}`).then(() => true, () => false);
   if (!present) {
-    await command('new-session', '-d', '-s', session, '-x', '100', '-y', '36', '-c', cwd, pi, ...args);
+    const plan = await launchPlan({ directory, cwd, args });
+    await command('new-session', '-d', '-s', session, '-x', '100', '-y', '36', '-c', plan.cwd, pi, ...plan.args);
+    // The new Pi writes its own record; older main-session records are stale.
+    for (const record of plan.stale) await removeRecord(directory, record.pid);
   }
   do {
     await delay(interval);

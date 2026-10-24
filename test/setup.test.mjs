@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtemp, mkdir, readFile, readlink, rm, stat, symlink, writeFile, access } from 'node:fs/promises';
+import { mkdtemp, mkdir, readFile, rm, stat, symlink, writeFile, access, readlink } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { setupPiVoice } from '../setup.mjs';
@@ -13,42 +13,51 @@ async function fixture(t) {
   const agentDir = join(home, '.pi', 'agent');
   await mkdir(projectDir, { recursive: true });
   await writeFile(join(projectDir, 'extension.mjs'), 'export default function() {}\n');
-  await writeFile(join(projectDir, 'launch.mjs'), '#!/usr/bin/env node\n');
   return { home, projectDir, agentDir };
 }
 
-test('fresh-checkout setup registers the extension and executable launcher, supports spaces and is idempotent', async (t) => {
+test('fresh-checkout setup registers the extension, supports spaces and is idempotent', async (t) => {
   const h = await fixture(t);
   const result = await setupPiVoice(h);
   const entry = await readFile(result.extension, 'utf8');
   assert.ok(entry.includes(`from ${JSON.stringify(join(h.projectDir, 'extension.mjs'))};`));
   assert.equal((await stat(result.extension)).mode & 0o777, 0o600);
-  assert.equal((await stat(join(h.projectDir, 'launch.mjs'))).mode & 0o777, 0o700);
-  for (const link of result.links) assert.equal(await readlink(link), join(h.projectDir, 'launch.mjs'));
+  assert.deepEqual(result.removed, []);
   assert.deepEqual(await setupPiVoice(h), result);
 });
 
-test('setup refuses unrelated extensions without creating launcher links', async (t) => {
+test('setup refuses unrelated extensions', async (t) => {
   const h = await fixture(t);
   const extension = join(h.agentDir, 'extensions', 'pi-voice.ts');
   await mkdir(dirname(extension), { recursive: true });
   await writeFile(extension, '// my own extension\n');
   await assert.rejects(setupPiVoice(h), /Refusing to replace your existing extension/);
   assert.equal(await readFile(extension, 'utf8'), '// my own extension\n');
-  await assert.rejects(access(join(h.home, '.local', 'bin', 'pi-voice')));
 });
 
-test('setup preflights existing launcher files and foreign symlinks before writing the extension', async (t) => {
+test('setup removes only the launchers earlier versions created', async (t) => {
   const h = await fixture(t);
-  const link = join(h.agentDir, 'bin', 'pi-voice');
-  await mkdir(dirname(link), { recursive: true });
-  await symlink(join(h.home, 'other-project', 'launch.mjs'), link);
-  await assert.rejects(setupPiVoice(h), /Refusing to replace your existing launcher/);
-  await assert.rejects(access(join(h.agentDir, 'extensions', 'pi-voice.ts')));
-  await rm(link);
-  await writeFile(link, 'unrelated command');
-  await assert.rejects(setupPiVoice(h), /Refusing to replace your existing launcher/);
-  assert.equal(await readFile(link, 'utf8'), 'unrelated command');
+  const ours = join(h.agentDir, 'bin', 'pi-voice');
+  const foreign = join(h.home, '.local', 'bin', 'pi-voice');
+  await mkdir(dirname(ours), { recursive: true });
+  await mkdir(dirname(foreign), { recursive: true });
+  await symlink(join(h.projectDir, 'launch.mjs'), ours);
+  await symlink(join(h.home, 'other-project', 'launch.mjs'), foreign);
+  const script = join(h.home, '.shortcuts', 'Pi Voice');
+  const icon = join(h.home, '.shortcuts', 'icons', 'Pi Voice.png');
+  await mkdir(dirname(icon), { recursive: true });
+  await writeFile(script, '#!/bin/bash\n# Managed by Pi Voice: install-shortcut.mjs\nexec node launch.mjs --app\n');
+  await writeFile(icon, 'png');
+  const own = join(h.home, '.shortcuts', 'My script');
+  await writeFile(own, '#!/bin/bash\necho mine\n');
+  const result = await setupPiVoice(h);
+  assert.deepEqual(result.removed, [ours, script, icon]);
+  await assert.rejects(access(ours));
+  assert.equal(await readlink(foreign), join(h.home, 'other-project', 'launch.mjs'), 'Foreign links stay');
+  assert.equal(await readFile(own, 'utf8'), '#!/bin/bash\necho mine\n', 'Unrelated shortcuts stay');
+  await rm(foreign);
+  await writeFile(script, '#!/bin/bash\necho a user script with our name\n');
+  assert.deepEqual((await setupPiVoice(h)).removed, [], 'Unmarked scripts stay');
 });
 
 test('setup recognizes only the matching legacy local registration', async (t) => {

@@ -1,5 +1,5 @@
-// Optional Android WebView adapter. Chrome never gets a native bridge and keeps
-// its existing Web Speech / Termux:API path. Only speech methods are exposed.
+// Android WebView adapter: routes speech recognition to the native app.
+// Without the native bridge, the Web Speech / Termux:API path is used.
 (function () {
   const bridge = window.PiVoiceAndroid;
   if (!bridge || typeof bridge.startSpeech !== 'function' || typeof bridge.stopSpeech !== 'function' || typeof bridge.abortSpeech !== 'function') return;

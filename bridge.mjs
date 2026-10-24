@@ -10,10 +10,8 @@ const assets = new Map([
   ['/', ['index.html', 'text/html; charset=utf-8']],
   ['/app.js', ['app.js', 'text/javascript; charset=utf-8']],
   ['/style.css', ['style.css', 'text/css; charset=utf-8']],
-  ['/manifest.webmanifest', ['manifest.webmanifest', 'application/manifest+json']],
   ['/icon.svg', ['icon.svg', 'image/svg+xml']],
   ['/icon-192.png', ['icon-192.png', 'image/png']],
-  ['/icon-512.png', ['icon-512.png', 'image/png']],
 ]);
 
 function fail(status, message) {
@@ -82,8 +80,8 @@ export function termuxSpeech({ signal, timeout = 45000 } = {}) {
 }
 
 // Relay one authenticated API request to another local Pi bridge sharing this
-// token. The page stays on one origin, so WebView/Chrome need no cross-origin
-// access and the native request policy is unchanged.
+// token. The page stays on one origin, so the WebView needs no cross-origin
+// access and the native request policy stays strict.
 function forward(req, res, origin) {
   return new Promise((resolve) => {
     const url = new URL(req.url, origin);
@@ -110,7 +108,7 @@ function forward(req, res, origin) {
 
 /** Local-only, authenticated transport. The extension owns the actual Pi session. */
 export async function createVoiceBridge({
-  token, getState, getActivity, onPrompt, onAbort, onAwake, onNewSession, onSpawn, onClose, listSessions, peerOrigin,
+  token, getState, getActivity, onPrompt, onAbort, onAwake, onNewSession, onSpawn, onClose, onRestore, onForget, listSessions, listStopped, peerOrigin,
   pid = process.pid, speech = termuxSpeech, port = 8765,
 }) {
   if (!token || token.length < 32) throw new Error('A strong voice bridge token is required.');
@@ -129,14 +127,13 @@ export async function createVoiceBridge({
     res.setHeader('Cache-Control', 'no-store');
     res.setHeader('X-Content-Type-Options', 'nosniff');
     res.setHeader('Referrer-Policy', 'no-referrer');
-    res.setHeader('Content-Security-Policy', "default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src 'self'; manifest-src 'self'; base-uri 'none'; frame-ancestors 'none'; form-action 'none'");
+    res.setHeader('Content-Security-Policy', "default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src 'self'; base-uri 'none'; frame-ancestors 'none'; form-action 'none'");
     try {
       if (closing) throw fail(503, 'Pi is reloading. Reconnect in a moment.');
       if (req.headers.host !== new URL(origin).host) throw fail(403, 'Invalid host.');
       const path = new URL(req.url, origin).pathname;
-      // Android/Chrome may mark an external app launch as cross-site. The public
-      // landing page contains no credentials or session data and must be openable
-      // from a link. Never extend this exception to APIs or non-GET requests.
+      // An app-initiated WebView load may be marked as cross-site. The public
+      // landing page contains no credentials or session data and must load. Never extend this exception to APIs or non-GET requests.
       const publicLandingPage = req.method === 'GET' && path === '/';
       if (!publicLandingPage) {
         if (req.headers.origin && req.headers.origin !== origin) throw fail(403, 'Cross-origin requests are not allowed.');
@@ -174,12 +171,24 @@ export async function createVoiceBridge({
         send(200, getActivity());
       } else if (req.method === 'GET' && path === '/api/sessions') {
         if (!listSessions) throw fail(501, 'Session switching is not installed. Restart Pi after updating.');
-        send(200, { self: pid, sessions: await listSessions() });
+        send(200, { self: pid, sessions: await listSessions(), stopped: listStopped ? await listStopped() : [] });
       } else if (req.method === 'POST' && path === '/api/session/spawn') {
         const body = await readJSON(req);
         if (!body || typeof body.id !== 'string' || !/^[a-zA-Z0-9-]{8,80}$/.test(body.id)) throw fail(400, 'A valid request ID is required.');
         if (!onSpawn) throw fail(501, 'Parallel sessions are not installed. Restart Pi after updating.');
         send(202, await onSpawn(body.id));
+      } else if (req.method === 'POST' && (path === '/api/session/restore' || path === '/api/session/forget')) {
+        const body = await readJSON(req);
+        // Only a PID: the record itself is read from Pi's private state.
+        if (!body || !Number.isSafeInteger(body.pid) || body.pid < 1) throw fail(400, 'A valid session is required.');
+        if (path.endsWith('/restore')) {
+          if (typeof body.id !== 'string' || !/^[a-zA-Z0-9-]{8,80}$/.test(body.id)) throw fail(400, 'A valid request ID is required.');
+          if (!onRestore) throw fail(501, 'Restoring sessions is not installed. Restart Pi after updating.');
+          send(202, await onRestore(body.id, body.pid));
+        } else {
+          if (!onForget) throw fail(501, 'Restoring sessions is not installed. Restart Pi after updating.');
+          send(200, await onForget(body.pid));
+        }
       } else if (req.method === 'POST' && path === '/api/session/close') {
         const body = await readJSON(req);
         if (!body || typeof body.sessionId !== 'string' || body.sessionId !== getState().sessionId) throw fail(409, 'The Pi session changed. Review it before closing.');

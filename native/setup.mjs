@@ -42,7 +42,7 @@ async function main() {
     await exec(join(prefix, 'bin/termux-open'), ['--view', '--content-type', 'application/vnd.android.package-archive', apk]);
     console.log('Opened the Android installer. Approve installation, then open Pi Voice Native and grant Run commands in Termux.');
   }
-  console.log('Your current Pi Voice shortcut, Chrome data and saved Pi sessions are unchanged.');
+  console.log('Saved Pi sessions are unchanged.');
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {

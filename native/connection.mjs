@@ -11,7 +11,7 @@ export function discoverConnections(directory = stateDir, options) {
 export function chooseConnection(all) {
   const primary = all.filter((connection) => !connection.spawned);
   const connections = primary.length ? primary : all.slice(0, 1);
-  if (connections.length > 1) throw new Error('Several Pi sessions are running. Close extra sessions in Termux, or use /voice in the desired session to open it in Chrome. Nothing was started or selected automatically.');
+  if (connections.length > 1) throw new Error('Several Pi sessions you started yourself are running. Quit the extra ones in Termux, then open Pi Voice Native again. Nothing was started or selected automatically.');
   return connections[0];
 }
 

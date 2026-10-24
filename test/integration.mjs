@@ -86,7 +86,7 @@ try {
       'Sec-Fetch-Dest': 'document', 'Sec-Fetch-User': '?1',
     } }, (res) => { res.resume(); resolve(res.statusCode); }).on('error', reject);
   });
-  assert.equal(launchStatus, 200, 'Chrome external launch must open the public app');
+  assert.equal(launchStatus, 200, 'An app-initiated load must open the public page');
   assert.equal((await fetch(`${endpoint.origin}/api/state`, { headers: {
     Authorization: `Bearer ${endpoint.token}`, 'Sec-Fetch-Site': 'cross-site',
   } })).status, 403, 'External launch exception must not apply to the API');

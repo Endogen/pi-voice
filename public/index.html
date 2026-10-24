@@ -6,7 +6,6 @@
   <meta name="theme-color" content="#111827">
   <meta name="color-scheme" content="dark">
   <title>Pi Voice</title>
-  <link rel="manifest" href="/manifest.webmanifest">
   <link rel="icon" href="/icon.svg" type="image/svg+xml">
   <link rel="stylesheet" href="/style.css">
   <script src="/app.js" defer></script>
@@ -31,6 +30,7 @@
     </header>
 
     <section class="exchange" aria-label="Latest question and answer">
+      <button id="restore-banner" class="restore-banner" hidden><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 12a9 9 0 1 0 2.6-6.4L3 8"/><path d="M3 3v5h5"/></svg><span id="restore-label">Earlier sessions stopped · Restore</span></button>
       <section id="question-card" class="question-card" aria-label="Your latest question" hidden>
         <h2 class="sr-only">You asked</h2><div id="latest-question" class="plain-text" tabindex="0"></div>
       </section>
@@ -46,7 +46,7 @@
     </section>
 
     <section class="composer" aria-label="Write, speak or attach images to your next message">
-      <p id="notice" role="status" aria-live="polite" tabindex="0">Open this app with /voice in Pi.</p>
+      <div class="notice-row"><p id="notice" role="status" aria-live="polite" tabindex="0">Connecting to Pi…</p><button id="reconnect" class="pill-button" hidden>Reconnect</button></div>
       <div id="prompt-box" class="prompt-box">
         <div id="attachments" class="attachments" aria-label="Selected images" hidden></div>
         <p id="image-hint" class="image-hint" hidden>Images send only when you tap Send. Remove any private details first.</p>
@@ -68,6 +68,7 @@
     <div class="sheet-header"><h2 id="sessions-title">Sessions</h2><button id="close-sessions" class="icon-button" aria-label="Close sessions"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M18 6 6 18M6 6l12 12"/></svg></button></div>
     <div class="sheet-body">
       <div id="session-list" class="session-list" role="list"></div>
+      <div id="stopped-section" hidden><h3 class="list-heading">Stopped earlier</h3><div id="stopped-list" class="session-list" role="list"></div></div>
       <button id="sessions-new" class="wide-button"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg>New session</button>
       <p id="sessions-hint" class="hint">A new session started while Pi is working runs alongside it. Up to 4 sessions can run at once; each stays saved in Pi.</p>
     </div>
@@ -95,17 +96,17 @@
         <label class="switch"><span>Send automatically after speech</span><input type="checkbox" id="autosend" role="switch"></label>
         <p class="hint">Off by default, so you can review the transcript first.</p>
         <label for="engine">Speech engine</label>
-        <select id="engine"><option id="speech-primary" value="browser">Browser speech (recommended)</option><option value="termux">Android via Termux:API (fallback)</option></select>
-        <label id="speech-language-label" for="language">Browser speech language</label>
+        <select id="engine"><option id="speech-primary" value="browser">Android speech (recommended)</option><option value="termux">Termux:API (fallback)</option></select>
+        <label id="speech-language-label" for="language">Speech language</label>
         <input id="language" type="text" value="en-US" maxlength="35" placeholder="en-US, de-DE, …" autocapitalize="off" spellcheck="false">
-        <p class="hint">Android fallback uses the Termux:API language. Allow microphone access when Android asks. Your speech provider may process audio online; this app stores no audio.</p>
+        <p class="hint">The Termux:API fallback uses its own language setting. Allow microphone access when Android asks. Your speech provider may process audio online; this app stores no audio.</p>
       </section>
       <section class="settings-section" aria-label="Read replies aloud">
         <h3>Voice output</h3>
         <p id="read-support" class="hint">Tap Read aloud beside Pi’s reply to listen. Replies never play automatically.</p>
         <label for="read-language">Read-aloud language</label>
         <input id="read-language" type="text" value="en-US" maxlength="35" placeholder="en-US, de-DE, …" autocapitalize="off" spellcheck="false">
-        <p class="hint">Uses Android text-to-speech in the native app, or your browser’s speech engine. Install a voice in Android’s text-to-speech settings if needed. Your selected speech provider may process the reply online. Code blocks are skipped; the text remains visible. Playback stops when you leave the app, start speaking or switch replies.</p>
+        <p class="hint">Uses Android text-to-speech. Install a voice in Android’s text-to-speech settings if needed. Your selected speech provider may process the reply online. Code blocks are skipped; the text remains visible. Playback stops when you leave the app, start speaking or switch replies.</p>
       </section>
       <section class="settings-section" aria-label="Background operation">
         <h3>Keep Pi available</h3>
@@ -115,7 +116,7 @@
       </section>
       <section class="settings-section session" aria-label="Connected session"><h3>Connected Pi</h3><strong id="session">No session connected</strong><small id="directory"></small><small id="model"></small></section>
       <section class="settings-section" aria-label="Versions"><h3>About</h3><dl class="about"><div><dt>Pi Voice</dt><dd id="voice-version">—</dd></div><div><dt>Pi</dt><dd id="pi-version">—</dd></div></dl><p id="version-hint" class="hint" hidden></p></section>
-      <section class="settings-section"><h3>Home-screen app</h3><p id="home-launch-hint" class="hint">For one-tap startup, install Termux:Widget from the same source as Termux, then add its <strong>Pi Voice</strong> home-screen shortcut. It starts/resumes Pi and opens Chrome. A Chrome-only shortcut needs Pi already running.</p><p class="hint">Replies appear after each message completes; the working indicator stays visible during generation/tools. Reconnect: <code>pi-voice --app</code> in Termux or <code>/voice</code> in Pi. Stop bridge: <code>/voice stop</code>. Phone-only connection; no public server.</p></section>
+      <section class="settings-section"><h3>Termux</h3><p class="hint">Pi runs in Termux in the background; this app starts it and resumes your conversation if it stopped. To see Pi’s terminal, open Activity and tap Open in Termux. In Pi, <code>/voice stop</code> disconnects the app and <code>/voice</code> reconnects it. Phone-only connection; no public server.</p></section>
     </div>
   </dialog>
 </body>

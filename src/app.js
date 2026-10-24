@@ -41,6 +41,9 @@ let switchPending = false;
 let hostPid;
 let pollCount = 0;
 let noticeTimer;
+let stopped = [];
+let reconnectOnFailure = false;
+let offline = false;
 let activityData;
 let activitySupported = true;
 let activityPolling = false;
@@ -54,7 +57,7 @@ const playback = globalThis.PiVoicePlayback.create({
   onError: (code) => {
     const hints = {
       upgrade: 'Update Pi Voice Native to APK 0.1.2 or newer to read replies aloud.',
-      unsupported: 'Read aloud is unavailable here. Try Chrome or update the native app.',
+      unsupported: 'Read aloud is unavailable here. Update Pi Voice Native.',
       language: 'No voice for this language. Check Read-aloud language in Settings and install a matching Android voice.',
       'text-limit': 'This reply is too long to read aloud (maximum 32000 characters).',
       'audio-busy': 'Audio is busy. Stop other playback and try Read aloud again.',
@@ -65,20 +68,14 @@ const playback = globalThis.PiVoicePlayback.create({
 });
 const imageLimits = globalThis.PiVoiceImageLimits;
 const sessionStarting = () => Boolean(newSessionRequest || state?.newSessionAction?.status === 'starting');
-const nativeSpeech = Boolean(globalThis.PiVoiceNativeRecognition);
 const SpeechRecognition = globalThis.PiVoiceNativeRecognition || window.SpeechRecognition || window.webkitSpeechRecognition;
-if (nativeSpeech) {
-  setText('speech-primary', 'Android speech (native)');
-  setText('speech-language-label', 'Speech language');
-  setText('home-launch-hint', 'You are using the native app. Tap its icon to reconnect; Termux starts in the background and the chat stays here. Your existing Pi Voice shortcut still works separately in Chrome.');
-}
 $('autosend').checked = storage.get('autosend') === 'true';
 $('language').value = storage.get('language') || navigator.language || 'en-US';
 $('engine').value = storage.get('engine') || (SpeechRecognition ? 'browser' : 'termux');
 $('awake').checked = storage.get('awake') !== 'false';
 $('read-language').value = storage.get('read-language') || navigator.language || 'en-US';
 $('read-language').disabled = !playback.supported;
-setText('read-support', playback.supported ? 'Tap Read aloud beside Pi’s completed reply to listen. Replies never play automatically.' : playback.needsUpgrade ? 'Update Pi Voice Native to APK 0.1.2 or newer to enable Read aloud.' : 'This browser does not provide speech playback. Try Chrome or the updated native app.');
+setText('read-support', playback.supported ? 'Tap the speaker beside Pi’s completed reply to listen. Replies never play automatically.' : playback.needsUpgrade ? 'Update Pi Voice Native to APK 0.1.2 or newer to enable Read aloud.' : 'Read aloud needs Pi Voice Native.');
 function speechHint() {
   return attachments.length ? 'Review images, then send' : $('autosend').checked ? 'Auto-send is on' : 'Review, then send';
 }
@@ -109,6 +106,15 @@ function header() {
   $('sessions-badge').classList.toggle('unread', fresh);
   $('open-sessions').setAttribute('aria-label', `Switch session (${sessions.length || 1} running${fresh ? ', new reply' : ''})`);
 }
+// Pi Voice Native 0.1.4+ can restart Pi from the page, resuming the session.
+const canReconnect = () => typeof window.PiVoiceAndroid?.reconnect === 'function';
+function reconnect() {
+  if (!canReconnect()) return;
+  cancelRecording();
+  playback.stop();
+  notice('Starting Pi and resuming your conversation…');
+  window.PiVoiceAndroid.reconnect();
+}
 function versions() {
   const page = globalThis.PiVoiceVersion || 'Unknown';
   setText('voice-version', page);
@@ -132,6 +138,9 @@ function controls() {
   $('listening').classList.toggle('live', listening);
   header();
   versions();
+  $('reconnect').hidden = !offline || !canReconnect();
+  $('restore-banner').hidden = !connected || !stopped.length;
+  setText('restore-label', `${stopped.length} earlier session${stopped.length === 1 ? '' : 's'} stopped · Restore`);
   $('send').disabled = switching || !connected || sending || listening || preparingImages || (!$('draft').value.trim() && !attachments.length);
   $('attach').disabled = switching || !connected || sending || listening || preparingImages;
   $('image-input').disabled = $('attach').disabled;
@@ -253,10 +262,8 @@ function terminalControls() {
   if (bridge && !capable) hint = 'Update Pi Voice Native to APK 0.1.3 or newer to open Termux from here.';
   else if (bridge && session) hint = 'Opens this Pi’s live terminal in Termux. To leave it running, press Ctrl+B then D. Ctrl+C or Ctrl+D would stop Pi.';
   else if (bridge) hint = 'This Pi runs in a Termux tab you started, so Termux opens on its most recent tab.';
-  else if (session) hint = `Chrome cannot open Termux directly. Copy the command, open Termux and paste it. Leave with Ctrl+B then D.`;
-  else hint = 'Chrome cannot open Termux directly. Switch to the Termux tab where this Pi runs.';
-  if (!$('open-terminal').dataset.copied) setText('open-terminal-label', bridge ? 'Open in Termux' : 'Copy Termux command');
-  $('open-terminal').hidden = !bridge && !session;
+  else hint = 'Open this page in Pi Voice Native to switch to Pi’s terminal.';
+  $('open-terminal').hidden = !bridge;
   $('open-terminal').disabled = Boolean(bridge && !capable);
   setText('terminal-hint', hint);
 }
@@ -271,16 +278,7 @@ function openTerminal() {
     cancelRecording();
     playback.stop();
     bridge.openTerminal(session);
-  } else if (!bridge && session) {
-    const command = `tmux -L pi-voice-native attach -t ${session}`;
-    const done = (label) => {
-      $('open-terminal').dataset.copied = 'true';
-      setText('open-terminal-label', label);
-      setTimeout(() => { delete $('open-terminal').dataset.copied; terminalControls(); }, 2500);
-    };
-    Promise.resolve(navigator.clipboard?.writeText(command)).then(
-      () => done(navigator.clipboard ? 'Copied' : command),
-      () => done(command));
+
   }
 }
 async function pollActivity() {
@@ -368,7 +366,7 @@ async function prepareImage(file) {
     canvas.width = Math.max(1, Math.round(bitmap.width * scale));
     canvas.height = Math.max(1, Math.round(bitmap.height * scale));
     const context = canvas.getContext('2d', { alpha: false });
-    if (!context) throw new Error('Image processing is unavailable in this browser. Try Chrome.');
+    if (!context) throw new Error('Image processing is unavailable. Update Android System WebView.');
     context.fillStyle = '#fff';
     context.fillRect(0, 0, canvas.width, canvas.height);
     context.imageSmoothingQuality = 'high';
@@ -376,7 +374,7 @@ async function prepareImage(file) {
     // Re-encoding strips original metadata and keeps uploads small. Transparent
     // pixels become white; JPEG/PNG/WebP inputs all use JPEG on the wire.
     const blob = await new Promise((resolve) => canvas.toBlob(resolve, 'image/jpeg', 0.9));
-    if (!blob || blob.type !== 'image/jpeg') throw new Error('Could not prepare this image. Try Chrome or a smaller file.');
+    if (!blob || blob.type !== 'image/jpeg') throw new Error('Could not prepare this image. Try a smaller file.');
     if (blob.size > imageLimits.maxImageBytes) throw new Error('Prepared image exceeds 3 MiB. Crop it or choose a smaller image.');
     const preview = await new Promise((resolve, reject) => {
       const reader = new FileReader();
@@ -591,7 +589,7 @@ function checkSpawn() {
   if (match) {
     spawnRequest = undefined;
     selectTarget(match.pid);
-    notice('New session ready. The previous one keeps running under Sessions.');
+    notice(request.restored ? 'Session restored.' : 'New session ready. The previous one keeps running under Sessions.');
     void poll();
   } else if (Date.now() >= request.deadline) {
     spawnRequest = undefined;
@@ -621,6 +619,70 @@ function switchTo(pid) {
   notice('');
   controls();
   void poll();
+}
+async function restoreSession(item) {
+  if (!connected || spawnRequest || sending || listening) return;
+  const request = { id: crypto.randomUUID(), deadline: Date.now() + 45000, restored: true };
+  spawnRequest = request;
+  $('sessions-dialog').close();
+  notice('Restoring the session…');
+  controls();
+  try {
+    await api('session/restore', { method: 'POST', body: { id: request.id, pid: item.pid }, pid: 0 });
+    stopped = stopped.filter((other) => other.pid !== item.pid);
+    await pollSessions();
+  } catch (error) {
+    if (spawnRequest === request) { spawnRequest = undefined; notice(error.message, true); }
+  } finally { controls(); }
+}
+async function forgetSession(item) {
+  try {
+    await api('session/forget', { method: 'POST', body: { pid: item.pid }, pid: 0 });
+    stopped = stopped.filter((other) => other.pid !== item.pid);
+    renderSessions();
+  } catch (error) { notice(error.message, true); }
+  finally { controls(); }
+}
+function ago(time) {
+  const minutes = Math.round((Date.now() - time) / 60000);
+  if (!(minutes >= 1)) return 'just now';
+  if (minutes < 60) return `${minutes} min ago`;
+  const hours = Math.round(minutes / 60);
+  return hours < 48 ? `${hours} h ago` : `${Math.round(hours / 24)} days ago`;
+}
+function stoppedRow(item) {
+  const row = document.createElement('div');
+  row.className = 'session-item stopped';
+  row.setAttribute('role', 'listitem');
+  const info = document.createElement('div');
+  info.className = 'session-row';
+  const dot = document.createElement('span');
+  dot.className = 'status-dot';
+  const text = document.createElement('span');
+  text.className = 'session-text';
+  const title = document.createElement('span');
+  title.className = 'session-title';
+  title.textContent = item.title || 'Pi session';
+  const sub = document.createElement('span');
+  sub.className = 'session-sub';
+  sub.textContent = ['Stopped', ago(item.updated), folder(item.cwd)].filter(Boolean).join(' · ');
+  text.append(title, sub);
+  info.append(dot, text);
+  const restore = document.createElement('button');
+  restore.className = 'icon-button';
+  restore.setAttribute('aria-label', `Restore ${title.textContent}`);
+  restore.title = 'Restore';
+  restore.innerHTML = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 12a9 9 0 1 0 2.6-6.4L3 8"/><path d="M3 3v5h5"/></svg>';
+  restore.disabled = Boolean(spawnRequest);
+  restore.addEventListener('click', () => { void restoreSession(item); });
+  const forget = document.createElement('button');
+  forget.className = 'icon-button';
+  forget.setAttribute('aria-label', `Dismiss ${title.textContent}`);
+  forget.title = 'Dismiss (stays saved in Pi)';
+  forget.innerHTML = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M18 6 6 18M6 6l12 12"/></svg>';
+  forget.addEventListener('click', () => { void forgetSession(item); });
+  row.append(info, restore, forget);
+  return row;
 }
 async function closeSession(item) {
   const working = item.busy || item.pending ? 'Pi is still working there; its task will stop. ' : '';
@@ -671,6 +733,8 @@ function renderSessions() {
     }
     return row;
   }));
+  $('stopped-section').hidden = !stopped.length;
+  $('stopped-list').replaceChildren(...stopped.map(stoppedRow));
   $('sessions-hint').textContent = sessionsSupported
     ? 'A new session started while Pi is working runs alongside it. Up to 4 sessions can run at once; each stays saved in Pi.'
     : 'Restart Pi once to run and switch between parallel sessions.';
@@ -690,6 +754,7 @@ async function pollSessions() {
     }
     for (const pid of [...unread]) if (!list.some((item) => item.pid === pid)) unread.delete(pid);
     sessions = list.sort((a, b) => (a.pid === hostPid ? -1 : b.pid === hostPid ? 1 : a.pid - b.pid));
+    stopped = Array.isArray(result.stopped) ? result.stopped : [];
     checkSpawn();
   } catch (error) {
     if ([404, 501].includes(error.status)) sessionsSupported = false;
@@ -731,6 +796,8 @@ async function poll() {
     }
     state = next;
     connected = true;
+    offline = false;
+    reconnectOnFailure = false;
     unread.delete(next.pid);
     $('session').textContent = `${next.sessionName} · ${next.sessionId.slice(0, 8)}`;
     $('directory').textContent = next.cwd;
@@ -758,14 +825,17 @@ async function poll() {
     if ($('history-dialog').open) renderMessages(next.messages);
   } catch (error) {
     connected = false;
+    offline = true;
     setText('connection', 'Disconnected');
     $('connection').classList.toggle('disconnected', true);
     if (error.status !== 401) wakeInitialized = false;
     if (newSessionRequest) {
       if (!checkNewSession()) notice('Reconnecting while Pi starts the new session…');
-    } else notice(error.status === 401 ? error.message : nativeSpeech
-      ? 'Pi is not reachable. Tap the Pi Voice Native home-screen icon to reconnect. Your existing Pi Voice shortcut is also available as a fallback.'
-      : 'Pi is not reachable. Tap the Termux:Widget Pi Voice icon to start/reconnect, or run pi-voice --app in Termux. A Chrome-only shortcut cannot start Pi.', true);
+    } else if (error.status === 401) notice(error.message, true);
+    else if (reconnectOnFailure && canReconnect()) { reconnectOnFailure = false; reconnect(); }
+    else notice(canReconnect() ? 'Pi isn’t running. Tap Reconnect to start it and resume your conversation.'
+      : window.PiVoiceAndroid ? 'Pi isn’t running. Update Pi Voice Native to reconnect from here, or close the app and tap its icon.'
+        : 'Pi is not reachable. Open Pi Voice Native to start it.', true);
   } finally {
     polling = false;
     controls();
@@ -848,7 +918,7 @@ async function startSpeech() {
   if ($('engine').value === 'browser') {
     if (!SpeechRecognition) {
       error = true;
-      notice('This browser has no speech recognition. Open in Chrome, use Android fallback, or your keyboard’s microphone.', true);
+      notice('Speech recognition is unavailable. Use the Termux:API engine in Settings or your keyboard’s microphone.', true);
       await finish();
       return;
     }
@@ -870,15 +940,15 @@ async function startSpeech() {
       if (finished) return;
       error = true;
       const hints = {
-        'not-allowed': nativeSpeech ? 'Allow microphone permission for Pi Voice Native in Android app settings.' : 'Allow microphone permission for Chrome in Android settings and this site.',
+        'not-allowed': 'Allow microphone permission for Pi Voice Native in Android app settings.',
         'audio-capture': 'Microphone unavailable. Close other apps using it.',
-        'network': 'Speech service network error. Check internet or try Android fallback.',
+        'network': 'Speech service network error. Check internet or try the Termux:API engine.',
         'no-speech': 'No speech detected. Try again.',
         'language-not-supported': 'Try another speech language in settings.',
-        'service-not-allowed': 'Speech service is unavailable. Try Android fallback.',
+        'service-not-allowed': 'Speech service is unavailable. Try the Termux:API engine.',
         'aborted': 'Listening cancelled.',
       };
-      notice(hints[event.error] || `Speech error: ${event.error}. Try Android fallback.`, true);
+      notice(hints[event.error] || `Speech error: ${event.error}. Try the Termux:API engine.`, true);
     };
     engine.onend = () => { void finish(); };
     try { engine.start(); } catch (err) {
@@ -947,12 +1017,15 @@ for (const name of ['sessions', 'activity', 'history', 'settings']) {
   dialog.addEventListener('click', (event) => { if (event.target === dialog) dialog.close(); });
 }
 document.addEventListener('visibilitychange', () => {
-  if (!document.hidden) void poll();
+  // Coming back to a stopped Pi: the native app restarts it once by itself.
+  if (!document.hidden) { reconnectOnFailure = true; void poll(); }
   // Never auto-send a recording that was interrupted by switching apps.
   else { cancelRecording(); playback.stop(); }
 });
 window.addEventListener?.('pagehide', () => playback.stop());
 $('thinking').addEventListener('click', () => $('open-activity').click());
+$('reconnect').addEventListener('click', reconnect);
+$('restore-banner').addEventListener('click', () => $('open-sessions').click());
 $('open-terminal').addEventListener('click', openTerminal);
 $('sessions-new').addEventListener('click', () => { $('sessions-dialog').close(); void startNewSession(); });
 setInterval(() => {

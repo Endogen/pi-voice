@@ -15,7 +15,7 @@ def chunk(kind, data):
     return struct.pack('!I', len(data)) + kind + data + struct.pack('!I', zlib.crc32(kind + data))
 
 
-for size in (192, 512):
+for size in (192,):
     rows = bytearray()
     for iy in range(size):
         rows.append(0)

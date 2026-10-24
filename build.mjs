@@ -15,7 +15,7 @@ const parts = [
   await readFile(new URL('src/app.js', root), 'utf8'),
 ];
 // Concatenate into the already-served /app.js route: frontend changes need only
-// a Chrome refresh, not a Pi restart to change the backend's asset allowlist.
+// reopening the app, not a Pi restart to change the backend's asset allowlist.
 const bundle = `${parts.join('\n;\n').trimEnd()}\n`;
 const output = new URL('public/app.js', root);
 if (process.argv.includes('--check')) {

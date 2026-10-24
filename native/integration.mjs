@@ -1,5 +1,5 @@
 // Real on-device tmux PTY + installed Pi, isolated discovery/session directory.
-// No provider prompts, real wake locks, Chrome launch or user-session changes.
+// No provider prompts, real wake locks or user-session changes.
 import assert from 'node:assert/strict';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
@@ -60,7 +60,7 @@ try {
   await exec(tmux, ['-L', socket, 'send-keys', '-t', '=pi-voice:0.0', 'C-d']);
   await Promise.race([host, delay(10000).then(() => { throw new Error('Native host did not exit with its Pi PTY'); })]);
   if (hostFailure) throw hostFailure;
-  console.log('Native PTY integration passed: real Pi cold start, authenticated discovery, retap reuse, new session, same connection, clean host exit. No provider calls or Chrome launch.');
+  console.log('Native PTY integration passed: real Pi cold start, authenticated discovery, retap reuse, new session, same connection, clean host exit. No provider calls.');
 } finally {
   await exec(tmux, ['-L', socket, 'kill-server']).catch(() => {});
   await host;

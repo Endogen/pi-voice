@@ -1,5 +1,16 @@
 # Changelog
 
+## 2.0.0 — native APK 0.1.4 (versionCode 5)
+
+Pi Voice is now a native-app-only project.
+
+- **Resume after Pi stops:** each voice-enabled Pi records which conversation it has open (`~/.pi/agent/voice/running/`). When the app has to start Pi again, the native host reopens that conversation in its own folder (`pi --session <file>`) instead of `pi -c` in the home folder. Parallel sessions that stopped are offered under **Sessions → Stopped earlier** with Restore or Dismiss; a banner points to them. The page only sends a process ID; session files are read from private state. Sessions closed from the app are not offered again.
+- **Reconnect:** when Pi isn't running, the app shows **Reconnect**, and returning to the app restarts Pi once by itself. APK 0.1.4 adds the parameterless `reconnect()` bridge method, which re-runs the normal connection routine.
+- **Removed:** the Chrome interface and its launchers: the `pi-voice` command (`launch.mjs`), the Termux:Widget shortcut (`install-shortcut.mjs`, `pi-voice --pin`), `/voice url`, the `--voice-open` flag, browser opening, the web app manifest and `ANDROID-LAUNCHER.md`. `npm run setup` now only registers the extension and removes the `pi-voice` links and widget script that earlier versions created (only files it can identify as its own). Remove the old home-screen shortcut yourself.
+- **Docs:** README rewritten for the native app; native/README updated.
+
+Run `git pull` and `npm run setup`, restart Pi once, and install APK 0.1.4 with `npm run native:install`.
+
 ## 1.9.0 — native APK 0.1.3 (versionCode 4)
 
 - **Live activity:** the working line names Pi's current step ("bash · npm test", "Writing the reply…", "Waiting for you in Termux"). Tapping it, or the terminal button in the reply bar, opens an **Activity** sheet: each tool call with its arguments, duration and a live output tail, plus the reply being written. Finished steps collapse to one line; tap a step for its full output (last 4000 characters). Private model reasoning is never shown, only that a thinking step happened. The log covers the current run, is bounded and lives only in the running Pi's memory.

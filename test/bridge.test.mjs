@@ -46,9 +46,9 @@ const externalNavigation = {
   'Sec-Fetch-Dest': 'document', 'Sec-Fetch-User': '?1',
 };
 
-test('serves mobile shell, scripts, manifest and icons with no external dependencies', async (t) => {
+test('serves the app shell, scripts and icons with no external dependencies', async (t) => {
   const { bridge } = await setup(t);
-  for (const path of ['/', '/app.js', '/style.css', '/manifest.webmanifest', '/icon.svg', '/icon-192.png', '/icon-512.png']) {
+  for (const path of ['/', '/app.js', '/style.css', '/icon.svg', '/icon-192.png']) {
     const response = await fetch(bridge.origin + path);
     assert.equal(response.status, 200, path);
     assert.equal(response.headers.get('cache-control'), 'no-store');
@@ -60,7 +60,7 @@ test('serves mobile shell, scripts, manifest and icons with no external dependen
   assert.equal((await fetch(`${bridge.origin}/%2e%2e/extension.mjs`)).status, 404);
 });
 
-test('Chrome can open the public app from an external Android launch or link', async (t) => {
+test('the WebView can open the public app page even when the load is marked cross-site', async (t) => {
   const { bridge, request } = await setup(t);
   for (const origin of [undefined, 'android-app://com.termux', 'https://external.example']) {
     const headers = { ...externalNavigation, ...(origin ? { Origin: origin } : {}) };
@@ -379,7 +379,7 @@ test('relays API requests to another local Pi by PID and refuses unknown or malf
   assert.deepEqual([peerPrompts, prompts], [['Hello from speech'], []]);
   assert.equal((await request('/api/state', undefined, { 'X-Pi-Voice-Pid': '333' })).status, 410);
   assert.equal((await request('/api/state', undefined, { 'X-Pi-Voice-Pid': '../x' })).status, 400);
-  assert.deepEqual(await (await request('/api/sessions', undefined, { 'X-Pi-Voice-Pid': '222' })).json(), { self: 111, sessions: [{ pid: 111 }, { pid: 222 }] });
+  assert.deepEqual(await (await request('/api/sessions', undefined, { 'X-Pi-Voice-Pid': '222' })).json(), { self: 111, sessions: [{ pid: 111 }, { pid: 222 }], stopped: [] });
   const summary = await (await request('/api/state?summary=1', undefined, { 'X-Pi-Voice-Pid': '222' })).json();
   assert.equal(summary.messages, undefined, 'The switcher never downloads message history');
   assert.equal(summary.preview, 'Peer question');

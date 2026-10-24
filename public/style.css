@@ -137,6 +137,16 @@ dialog::backdrop { background: rgb(3 7 18 / .66); }
 .session-row .check { color: var(--accent); }
 .session-empty { padding: 12px 4px; color: var(--muted); font-size: .88rem; }
 
+/* Reconnect and restore */
+.notice-row { display: flex; align-items: center; gap: 8px; }
+.notice-row #notice { flex: 1; min-width: 0; }
+.pill-button { min-height: 36px; margin: 0 4px 6px 0; padding: 0 14px; border-radius: 999px; background: var(--primary); color: var(--primary-fg); font-size: .85rem; }
+.restore-banner { justify-content: flex-start; gap: 10px; width: 100%; min-height: 44px; margin-bottom: 4px; padding: 8px 12px; border: 1px solid rgb(147 180 255 / .3); border-radius: var(--radius); background: var(--accent-soft); color: var(--accent); font-size: .86rem; text-align: left; flex-shrink: 0; }
+.restore-banner svg { width: 18px; height: 18px; }
+.list-heading { margin: 16px 0 6px; }
+.session-item.stopped .session-row { cursor: default; }
+.session-item.stopped .session-title { color: var(--muted); }
+
 /* Activity */
 .thinking.clickable { cursor: pointer; }
 .thinking.waiting { color: var(--warn); }

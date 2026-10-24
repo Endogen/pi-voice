@@ -8,6 +8,7 @@ import { createWakeLock } from './wake-lock.mjs';
 import { imageLimits } from './image-attachments.mjs';
 import { discoverConnections, readEndpoint } from './discovery.mjs';
 import { createActivity } from './activity.mjs';
+import { removeRecord, stoppedRecord, stoppedRecords, writeRecord } from './running.mjs';
 
 export const stateDir = join(process.env.PI_CODING_AGENT_DIR || join(homedir(), '.pi', 'agent'), 'voice');
 
@@ -24,17 +25,6 @@ async function loadToken() {
   const token = (await readFile(file, 'utf8')).trim();
   if (!/^[a-f0-9]{64}$/.test(token)) throw new Error(`Invalid token file: ${file}`);
   return token;
-}
-
-export function openBrowser(url) {
-  return new Promise((resolve, reject) => {
-    const command = `${process.env.PREFIX || '/data/data/com.termux/files/usr'}/bin/termux-open-url`;
-    // Prefer Chrome: other Android browsers frequently lack speech recognition.
-    execFile(command, [url, 'com.android.chrome'], { timeout: 10000 }, (error) => {
-      if (!error) return resolve();
-      execFile(command, [url], { timeout: 10000 }, (fallbackError) => fallbackError ? reject(fallbackError) : resolve());
-    });
-  });
 }
 
 const readVersion = async (file) => {
@@ -77,12 +67,12 @@ const fail = (status, message) => Object.assign(new Error(message), { status });
 
 // Start another Pi beside this one in the native host's private tmux server.
 // The new Pi publishes its own bridge; the app finds it by its spawn ID.
-export async function launchSession({ id, cwd }) {
+export async function launchSession({ id, cwd, args: piArgs = [] }) {
   const tmux = tmuxBinary();
   const managed = join(homedir(), '.pi', 'agent', 'bin', 'pi');
   const command = await access(managed).then(() => [managed], () => [process.execPath, process.argv[1]]);
   const env = [`PI_VOICE_SPAWN_ID=${id}`, ...(process.env.PI_CODING_AGENT_DIR ? [`PI_CODING_AGENT_DIR=${process.env.PI_CODING_AGENT_DIR}`] : [])];
-  const args = ['-L', 'pi-voice-native', 'new-session', '-d', '-s', `pi-voice-${randomBytes(4).toString('hex')}`, '-x', '100', '-y', '36', '-c', cwd, ...env.flatMap((item) => ['-e', item]), ...command];
+  const args = ['-L', 'pi-voice-native', 'new-session', '-d', '-s', `pi-voice-${randomBytes(4).toString('hex')}`, '-x', '100', '-y', '36', '-c', cwd, ...env.flatMap((item) => ['-e', item]), ...command, ...piArgs];
   await new Promise((resolve, reject) => execFile(tmux, args, { timeout: 10000 }, (error, _stdout, stderr) => {
     if (!error) return resolve();
     reject(error.code === 'ENOENT'
@@ -111,8 +101,6 @@ export default function installVoiceExtension(pi, { wakeLock = createWakeLock({ 
   // Runtime replacement reloads this module. Carry only the preferred port,
   // never a stale Pi context, across /new, /resume and /reload.
   const reconnectFile = join(stateDir, `reconnect-${process.pid}.json`);
-
-  pi.registerFlag('voice-open', { description: 'Open the Pi Voice mobile app at startup', type: 'boolean', default: false });
 
   const snapshot = () => {
     // Pi persists a message AFTER emitting message_end. Read at request time so
@@ -149,15 +137,21 @@ export default function installVoiceExtension(pi, { wakeLock = createWakeLock({ 
     }
   };
 
-  async function spawnSession(id) {
+  async function spawnSession(id, record) {
     if (spawned.has(id)) return { ok: true, id };
     const live = await discoverConnections(stateDir);
     if (live.length >= maxSessions) throw fail(409, `Up to ${maxSessions} sessions can run at once. Close one first.`);
     spawned.add(id);
-    try { await launch({ id, cwd: context.cwd }); }
+    try { await launch(record ? { id, cwd: record.cwd, args: ['--session', record.sessionFile] } : { id, cwd: context.cwd }); }
     catch (error) { spawned.delete(id); throw error; }
+    if (record) await removeRecord(stateDir, record.pid);
     return { ok: true, id };
   }
+  const record = () => ({
+    pid: process.pid, sessionId: context.sessionManager.getSessionId(), sessionFile: context.sessionManager.getSessionFile(),
+    cwd: context.cwd, spawned: Boolean(spawnId), title: context.sessionManager.getSessionName() || firstQuestion() || 'New session',
+  });
+  const saveRecord = () => writeRecord(stateDir, record()).catch(() => {});
 
   const readMessages = () => context.sessionManager.getBranch()
     .filter((entry) => entry.type === 'message' && ['user', 'assistant'].includes(entry.message.role))
@@ -180,6 +174,17 @@ export default function installVoiceExtension(pi, { wakeLock = createWakeLock({ 
         getState: snapshot,
         getActivity: () => ({ ...activity.snapshot(), terminal }),
         listSessions: async () => (await discoverConnections(stateDir)).map(({ url, ...session }) => session),
+        // Conversations whose Pi stopped (phone off, Android killed Termux).
+        listStopped: async () => (await stoppedRecords(stateDir)).map(({ pid, title, cwd, updated }) => ({ pid, title, cwd, updated })),
+        async onRestore(id, pid) {
+          const found = await stoppedRecord(stateDir, pid);
+          if (!found && !spawned.has(id)) throw fail(410, 'That session can no longer be restored.');
+          return spawnSession(id, found);
+        },
+        async onForget(pid) {
+          if (await stoppedRecord(stateDir, pid)) await removeRecord(stateDir, pid);
+          return { ok: true };
+        },
         peerOrigin: async (pid) => {
           const endpoint = await readEndpoint(stateDir, pid);
           return endpoint?.token === token ? endpoint.origin : undefined;
@@ -188,7 +193,8 @@ export default function installVoiceExtension(pi, { wakeLock = createWakeLock({ 
         onClose() {
           // Only app-started sessions: never quit a Pi the user runs in a terminal.
           if (!spawnId) throw fail(409, 'Only sessions started from the app can be closed here. Quit this one in Termux.');
-          setImmediate(() => context.shutdown());
+          // Closed on purpose: never offer it for restoring later.
+          setImmediate(() => { void removeRecord(stateDir, process.pid).finally(() => context.shutdown()); });
           return { ok: true };
         },
         onPrompt(text, images = []) {
@@ -230,6 +236,7 @@ export default function installVoiceExtension(pi, { wakeLock = createWakeLock({ 
         throw error;
       }
       bridge = created;
+      await saveRecord();
       if (ctx.mode === 'tui') ctx.ui.setStatus('pi-voice', `Voice ready · /voice · ${new URL(created.origin).port}`);
       return bridge;
     })();
@@ -256,11 +263,7 @@ export default function installVoiceExtension(pi, { wakeLock = createWakeLock({ 
       const reconnect = event.reason === 'startup' ? undefined : await readFile(reconnectFile, 'utf8').then(JSON.parse).catch(() => undefined);
       await unlink(reconnectFile).catch(() => {});
       const port = Number.isInteger(reconnect?.port) && reconnect.port > 0 && reconnect.port < 65536 ? reconnect.port : undefined;
-      const live = await start(ctx, port);
-      if (event.reason === 'startup' && pi.getFlag('voice-open')) {
-        await wakeLock.setEnabled(true).catch((error) => ctx.ui.notify(`Stay awake unavailable: ${error.message}`, 'warning'));
-        await openBrowser(live.url);
-      }
+      await start(ctx, port);
     } catch (error) {
       ctx.ui.notify(`Pi Voice: ${error.message}`, 'error');
     }
@@ -271,7 +274,8 @@ export default function installVoiceExtension(pi, { wakeLock = createWakeLock({ 
   // also keeps the live context current while the bridge runs.
   const track = {
     agent_start: () => activity.start(),
-    agent_settled: () => activity.settle(),
+    agent_settled: () => { activity.settle(); if (bridge) void saveRecord(); },
+    session_info_changed: () => { if (bridge) void saveRecord(); },
     message_update: (event) => activity.stream(event.assistantMessageEvent),
     tool_execution_start: (event) => activity.toolStart(event),
     tool_execution_update: (event) => activity.toolUpdate(event),
@@ -308,28 +312,25 @@ export default function installVoiceExtension(pi, { wakeLock = createWakeLock({ 
   });
 
   pi.registerCommand('voice', {
-    description: 'Open the voice app (/voice url | awake | sleep | stop)',
+    description: 'Connect Pi Voice Native to this Pi (/voice stop | awake | sleep)',
     handler: async (args, ctx) => {
       const action = args.trim();
-      if (action === 'stop') { await stop(); ctx.ui.notify('Pi Voice stopped.', 'info'); return; }
+      if (action === 'stop') { await stop(); ctx.ui.notify('Pi Voice disconnected from this Pi.', 'info'); return; }
       if (action === 'sleep') {
         try { await wakeLock.setEnabled(false); ctx.ui.notify('Pi Voice stay awake disabled for this session.', 'info'); }
         catch (error) { ctx.ui.notify(error.message, 'error'); }
         return;
       }
-      if (action && !['url', 'awake'].includes(action)) { ctx.ui.notify('Usage: /voice [url|awake|sleep|stop]', 'warning'); return; }
+      if (action && action !== 'awake') { ctx.ui.notify('Usage: /voice [stop|awake|sleep]', 'warning'); return; }
       try {
-        const live = await start(ctx);
+        await start(ctx);
         await wakeLock.setEnabled(true).catch((error) => ctx.ui.notify(`Stay awake unavailable: ${error.message}`, 'warning'));
-        if (action === 'awake') { ctx.ui.notify(wakeLock.status().active ? 'Termux wake lock requested. Android battery restrictions still apply.' : 'Stay awake could not be enabled. Check Android/Termux.', wakeLock.status().active ? 'info' : 'warning'); }
-        else if (action === 'url') ctx.ui.notify(live.url, 'info');
-        else {
-          await openBrowser(live.url);
-          ctx.ui.notify('Pi Voice opened. You can add it to your home screen from Chrome.', 'info');
-        }
+        if (action === 'awake') ctx.ui.notify(wakeLock.status().active ? 'Termux wake lock requested. Android battery restrictions still apply.' : 'Stay awake could not be enabled. Check Android/Termux.', wakeLock.status().active ? 'info' : 'warning');
+        else ctx.ui.notify('Pi Voice is connected. Open Pi Voice Native.', 'info');
       } catch (error) {
-        ctx.ui.notify(`Pi Voice: ${error.message}. Try /voice url and open the link manually.`, 'error');
+        ctx.ui.notify(`Pi Voice: ${error.message}`, 'error');
       }
     },
   });
+
 }

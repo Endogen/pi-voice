@@ -290,3 +290,33 @@ test('extension exposes live activity from Pi events, including for the state po
   h.events.get('agent_settled')({}, h.ctx);
   assert.equal((await get('state')).activity.step, undefined);
 });
+
+test('the extension records its open conversation and restores stopped ones by PID', async (t) => {
+  const launched = [];
+  const h = harness('rpc', { launch: async (options) => { launched.push(options); } });
+  const sessionFile = join(temp, 'saved.jsonl');
+  await (await import('node:fs/promises')).writeFile(sessionFile, '{}\n');
+  h.ctx.sessionManager.getSessionFile = () => sessionFile;
+  h.ctx.cwd = temp;
+  await h.events.get('session_start')({ reason: 'startup' }, h.ctx);
+  t.after(() => h.events.get('session_shutdown')({ reason: 'quit' }, h.ctx));
+  const own = JSON.parse(await readFile(join(stateDir, 'running', `${process.pid}.json`), 'utf8'));
+  assert.deepEqual([own.sessionFile, own.cwd, own.title, own.spawned], [sessionFile, temp, 'Test session', false]);
+  // A Pi that the phone stopped left this record behind.
+  const deadPid = 2147480000;
+  await (await import('node:fs/promises')).writeFile(join(stateDir, 'running', `${deadPid}.json`), JSON.stringify({ pid: deadPid, sessionFile, cwd: temp, title: 'Before the phone slept', spawned: true, updated: 1 }));
+  const ep = await endpoint();
+  const request = (path, body) => fetch(`${ep.origin}/api/${path}`, {
+    method: body ? 'POST' : 'GET', headers: { Authorization: `Bearer ${ep.token}`, 'Content-Type': 'application/json' },
+    body: body ? JSON.stringify(body) : undefined,
+  });
+  const listed = await (await request('sessions')).json();
+  assert.deepEqual(listed.stopped, [{ pid: deadPid, title: 'Before the phone slept', cwd: temp, updated: 1 }]);
+  assert.equal(JSON.stringify(listed).includes('saved.jsonl'), false, 'Session file paths stay private');
+  assert.equal((await request('session/restore', { id: 'restore-request-1', pid: deadPid })).status, 202);
+  assert.deepEqual(launched, [{ id: 'restore-request-1', cwd: temp, args: ['--session', sessionFile] }]);
+  assert.deepEqual((await (await request('sessions')).json()).stopped, []);
+  assert.equal((await request('session/restore', { id: 'restore-request-2', pid: deadPid })).status, 410);
+  assert.equal((await request('session/restore', { id: 'restore-request-3', pid: process.pid })).status, 410, 'A running Pi is never restored twice');
+  assert.equal((await request('session/restore', { id: 'restore-request-4', pid: '../x' })).status, 400);
+});

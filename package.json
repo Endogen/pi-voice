@@ -1,15 +1,14 @@
 {
   "name": "pi-voice-termux",
   "private": true,
-  "version": "1.9.0",
+  "version": "2.0.0",
   "type": "module",
-  "description": "Zero-dependency, local mobile voice and image chat interface for Pi in Termux",
+  "description": "Native Android voice app for the Pi coding agent running in Termux",
   "repository": { "type": "git", "url": "https://github.com/Endogen/pi-voice.git" },
   "homepage": "https://github.com/Endogen/pi-voice#readme",
   "bugs": "https://github.com/Endogen/pi-voice/issues",
   "scripts": {
     "setup": "node setup.mjs",
-    "install:shortcut": "node install-shortcut.mjs",
     "build": "node build.mjs",
     "test": "node build.mjs --check && node --test test/*.test.mjs",
     "test:integration": "node test/integration.mjs",

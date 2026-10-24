@@ -201,9 +201,9 @@ public final class MainActivity extends Activity {
             startService(command(PREFIX + "/bin/bash", new String[]{ROOT + "/native/host.sh"}, null));
             ComponentName started = startService(command(PREFIX + "/bin/node", new String[]{ROOT + "/native/bootstrap.mjs"}, connectionResult));
             if (started == null) throw new IllegalStateException();
-            loading("Starting or reconnecting to Pi…\nThe chat will open here; Chrome is not needed.");
+            loading("Starting or reconnecting to Pi…\nYour conversation opens here.");
             handler.postDelayed(() -> {
-                if (attempt.equals(nonce)) showError("No reply from Termux. Enable allow-external-apps=true in ~/.termux/termux.properties, grant this app ‘Run commands in Termux’, and retry. Your existing shortcut is unchanged.");
+                if (attempt.equals(nonce)) showError("No reply from Termux. Enable allow-external-apps=true in ~/.termux/termux.properties, grant this app ‘Run commands in Termux’, and retry.");
             }, 45000);
         } catch (RuntimeException error) {
             showError("Termux could not start the background command. Grant ‘Run commands in Termux’ in App permissions and enable allow-external-apps=true in Termux, then retry.");
@@ -248,10 +248,10 @@ public final class MainActivity extends Activity {
             activity.handler.postDelayed(() -> {
                 if (!activity.destroyed && url.equals(activity.connectionUrl) && !activity.pageReady && !activity.loadFailed) {
                     activity.loadFailed = true; activity.web.stopLoading();
-                    activity.showError("The local chat took too long to load. Tap Try again, or use your existing shortcut.");
+                    activity.showError("The local chat took too long to load. Tap Try again.");
                 }
             }, 20000);
-        } catch (Exception error) { activity.showError("Termux returned an invalid connection. No page was opened. Retry or use your existing shortcut."); }
+        } catch (Exception error) { activity.showError("Termux returned an invalid connection. No page was opened. Tap Try again."); }
     }
 
     private boolean trusted(Uri url) {
@@ -288,10 +288,10 @@ public final class MainActivity extends Activity {
             }
         }
         @Override public void onReceivedError(WebView view, WebResourceRequest request, WebResourceError error) {
-            if (request.isForMainFrame() && trusted(request.getUrl())) { loadFailed = true; pageReady = false; showError("The local chat could not load. Tap Try again to reconnect to Pi. Your existing shortcut is still available."); }
+            if (request.isForMainFrame() && trusted(request.getUrl())) { loadFailed = true; pageReady = false; showError("The local chat could not load. Tap Try again to reconnect to Pi."); }
         }
         @Override public void onReceivedHttpError(WebView view, WebResourceRequest request, WebResourceResponse response) {
-            if (request.isForMainFrame() && trusted(request.getUrl())) { loadFailed = true; pageReady = false; showError("The local chat returned an error. Tap Try again, or use your existing shortcut."); }
+            if (request.isForMainFrame() && trusted(request.getUrl())) { loadFailed = true; pageReady = false; showError("The local chat returned an error. Tap Try again."); }
         }
     }
 
@@ -341,7 +341,8 @@ public final class MainActivity extends Activity {
     }
 
     // Intentionally no command, URL, token, filesystem or navigation methods.
-    // JavaScript gets native speech and one fixed action: show Pi's terminal.
+    // JavaScript gets native speech and two fixed actions: restart Pi through
+    // the normal connection routine, and show Pi's terminal.
     public final class SpeechBridge {
         @JavascriptInterface public void speakText(String id, String text, String language) {
             if (id == null || !id.matches("[a-fA-F0-9-]{36}")) return;
@@ -378,6 +379,14 @@ public final class MainActivity extends Activity {
         }
         @JavascriptInterface public void abortSpeech(String id) {
             handler.post(() -> { if (trustedPage() && id != null && id.equals(speechId)) cancelSpeech("aborted"); });
+        }
+        @JavascriptInterface public void reconnect() {
+            // Same as tapping the app icon: start or resume Pi via Termux. No
+            // arguments: what to resume comes from Pi's private state only.
+            handler.post(() -> {
+                if (!trustedPage() || !resumed || nonce != null) return;
+                connect();
+            });
         }
         @JavascriptInterface public void openTerminal(String session) {
             final String name = TerminalTarget.session(session);
@@ -471,7 +480,7 @@ public final class MainActivity extends Activity {
         boolean granted = grants.length > 0 && grants[0] == PackageManager.PERMISSION_GRANTED;
         if (request == COMMAND_PERMISSION) {
             if (granted) connect();
-            else showError("Allow ‘Run commands in Termux’ in this app’s permissions, then tap Try again. This is a broad permission; grant it only to an app you trust. Your existing shortcut needs no changes.");
+            else showError("Allow ‘Run commands in Termux’ in this app’s permissions, then tap Try again. This is a broad permission; grant it only to an app you trust.");
         } else if (request == MICROPHONE_PERMISSION) {
             if (granted) beginSpeech(); else cancelSpeech("not-allowed");
         }
