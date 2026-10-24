@@ -10,6 +10,7 @@ const parts = [
   await readFile(new URL('src/markdown.js', root), 'utf8'),
   `globalThis.PiVoiceImageLimits = Object.freeze(${JSON.stringify(imageLimits)});`,
   await readFile(new URL('src/native-speech.js', root), 'utf8'),
+  await readFile(new URL('src/playback.js', root), 'utf8'),
   await readFile(new URL('src/app.js', root), 'utf8'),
 ];
 // Concatenate into the already-served /app.js route: frontend changes need only

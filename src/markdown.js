@@ -50,5 +50,23 @@ globalThis.PiVoiceMarkdown = (() => {
   md.renderer.rules.voice_checkbox = (tokens, index) => tokens[index].meta.checked
     ? '<input type="checkbox" checked disabled aria-label="Completed"> '
     : '<input type="checkbox" disabled aria-label="Not completed"> ';
-  return Object.freeze({ render: (text) => md.render(String(text)) });
+  function speechText(text) {
+    // Parse tokens directly: never insert model text into a live DOM to extract
+    // speech. Speak link labels, not destinations; skip fenced code blocks.
+    const inline = (tokens) => (tokens || []).map((token) => {
+      if (token.type === 'text' || token.type === 'code_inline') return token.content;
+      if (token.type === 'softbreak' || token.type === 'hardbreak') return '\n';
+      if (token.type === 'image') return `Image: ${inline(token.children) || token.content}. `;
+      if (token.type === 'voice_checkbox') return token.meta.checked ? 'Completed. ' : 'Not completed. ';
+      return token.children ? inline(token.children) : '';
+    }).join('');
+    return md.parse(String(text), {}).map((token) => {
+      if (token.type === 'inline') return inline(token.children);
+      if (token.type === 'fence' || token.type === 'code_block') return 'Code block omitted.\n';
+      if (token.type === 'td_close' || token.type === 'th_close') return '; ';
+      if (token.block && token.nesting === -1 || token.type === 'hr') return '\n';
+      return '';
+    }).join('').replace(/[ \t]+/g, ' ').replace(/ *\n */g, '\n').replace(/\n{3,}/g, '\n\n').trim();
+  }
+  return Object.freeze({ render: (text) => md.render(String(text)), speechText });
 })();

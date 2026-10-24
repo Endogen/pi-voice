@@ -1,6 +1,6 @@
 # Pi Voice for Termux
 
-A lightweight home-screen app: **tap the launcher → speak → review transcription → send to Pi**. Replies appear in Chrome, or in the optional **Pi Voice Native** app's embedded WebView. Attach screenshots/photos with the paperclip, with optional typed or spoken questions. The existing Chrome launcher needs no APK build; the optional native companion adds a loading screen and background startup. No extra npm dependencies, public server, speech API key or root access is required.
+A lightweight home-screen app: **tap the launcher → speak → review transcription → send to Pi**. Replies appear in Chrome, or in the optional **Pi Voice Native** app's embedded WebView. Attach screenshots/photos with the paperclip, with optional typed or spoken questions. Tap **Read aloud** to listen to a completed answer. The existing Chrome launcher needs no APK build; the optional native companion adds a loading screen and background startup. No extra npm dependencies, public server, speech API key or root access is required.
 
 ## Install from source
 
@@ -71,7 +71,7 @@ Do not run a newer native APK against older helper scripts; update the checkout 
 
 **For frontend changes:** refresh/reopen the Chrome page, or close and reopen the native Activity (Back out of the chat, then tap its icon). The running bridge serves the updated frontend files immediately, with `Cache-Control: no-store`.
 
-**When using the native app:** finish the current response and open Termux. If Pi was started by the native background host, attach with `tmux -L pi-voice-native attach -t pi-voice`. If the native app reused an already-running Pi, return to that original Pi terminal instead; there may be no native tmux session. At an empty Pi prompt press **Ctrl+D** to quit it (not merely detach). Then tap **Pi Voice Native** to resume the saved conversation with the updated backend; the existing Chrome shortcut remains untouched. If the APK itself changed, install the verified, same-signing-key update first with `npm run native:install`; Android asks you to approve it. APK 0.1.1 adds the image-preview request-policy fix. Do not install/restart while a response is running.
+**When using the native app:** finish the current response and open Termux. If Pi was started by the native background host, attach with `tmux -L pi-voice-native attach -t pi-voice`. If the native app reused an already-running Pi, return to that original Pi terminal instead; there may be no native tmux session. At an empty Pi prompt press **Ctrl+D** to quit it (not merely detach). Then tap **Pi Voice Native** to resume the saved conversation with the updated backend; the existing Chrome shortcut remains untouched. If the APK itself changed, install the verified, same-signing-key update first with `npm run native:install`; Android asks you to approve it. APK 0.1.1 adds the image-preview request-policy fix; APK **0.1.2** also adds native read-aloud playback. Do not install/restart while a response is running.
 
 **For the Chrome launcher / image attachments, the New session button and automatic wake-lock management:** restart Pi once after the current response finishes. At an empty Pi prompt press **Ctrl+D**, then run this in the **Termux shell**, in the same working directory:
 
@@ -89,7 +89,8 @@ For first installation only, `/reload` followed by `/voice` inside Pi loads the 
 2. Review/edit the words in the bottom composer, then tap **Send**.
 3. To send each utterance automatically, open **Settings** and enable **Send automatically after speech**. It is off by default because a misheard instruction can cause real actions.
 4. Tap **New** beside History to start a fresh Pi session. Confirm the dialog; the app clears the current view/draft only after the new session is ready. Your previous conversation remains saved in Pi (unless started with `--no-session`, which the dialog warns about). You can resume saved sessions with `/resume` in Pi; the app's History shows only the connected session.
-5. For one-tap cold startup, use the **Termux:Widget Pi Voice** icon described above. Chrome's **Add to Home screen** alone cannot start a stopped Pi.
+5. Tap **Read aloud** beside Pi’s completed reply to listen, or **Stop reading** to stop. In **Settings → Voice output**, choose a read-aloud language such as `en-US` or `de-DE`. It never plays automatically.
+6. For one-tap cold startup, use the **Termux:Widget Pi Voice** icon described above. Chrome's **Add to Home screen** alone cannot start a stopped Pi.
 
 The screen is a compact workspace rather than a long scrolling website:
 
@@ -115,6 +116,20 @@ pi-voice --new -c     # Continue the most recent saved session and open the app
 ```
 
 If several Pi sessions are running, use `/voice` inside the specific session you want. Check its name, working directory and model in **Settings → Connected Pi**.
+
+## Reading Pi’s answer aloud
+
+**Read aloud** appears beside the latest completed reply, not while Pi is working. Tap it once to listen; it becomes **Stop reading** while playing. Replies never autoplay or resume after returning to the app. Reading does not submit another prompt or make a model/API request.
+
+- **Pi Voice Native:** install the same-key **APK 0.1.2 / versionCode 3** update with `npm run native:install` after this response finishes, then approve Android's installer and reopen the app. Earlier APKs explain the upgrade in Settings rather than trying unreliable WebView browser speech. Do not uninstall Termux or the companion app to apply a same-key update.
+- **Chrome:** refresh the frontend and use the browser's speech synthesis when available. A Pi backend restart is **not needed specifically for read aloud**; the feature changes the frontend and native shell, not the bridge.
+- Choose **Settings → Voice output → Read-aloud language**, e.g. `en-US` or `de-DE`. This is separate from microphone recognition language and is remembered on the device. Install a matching voice in Android's text-to-speech settings if one is missing; check media volume if playback is silent. Available voices/pronunciation depend on the selected engine.
+
+Markdown is converted to spoken text: formatting and link destinations are removed, image descriptions remain, and code blocks are announced as omitted rather than reading commands aloud. Long replies are split into bounded utterances without splitting Unicode surrogate pairs. A reading is limited to 32000 characters; oversize or unavailable speech fails with an explanation, without modifying the answer or draft.
+
+Playback stops when you start the microphone, send a question, start/switch sessions or replies, or leave the app. The native shell also stops on pause, navigation/reconnect or audio-focus loss and releases its audio resources when destroyed. This prevents recording Pi's own voice into another prompt. Error/timeout/cancellation callbacks from an older reading cannot restart it or stop a newer one.
+
+**Privacy:** this app does not record speech playback or upload it to a Pi Voice service. However, your selected Android/browser text-to-speech provider **may process the reply online**. There is no offline guarantee; choose/install an offline voice if sensitive content must stay on-device. Native output uses Android `TextToSpeech` and does not require microphone permission.
 
 ## Attaching screenshots and photos
 
@@ -226,6 +241,7 @@ npm test               # Bundle freshness + automated unit/HTTP/UI simulation te
 npm run test:integration
 npm run test:native    # Isolated real Pi inside a background tmux PTY
 npm run test:native:policy # Executable Java WebView request-policy checks; requires JDK
+npm run test:native:speech # Executable Java speech chunk/Unicode checks; requires JDK
 npm run build:native   # Optional APK; needs native tools/platform jar (native/README.md)
 npm run native:setup   # Show external-command setting without changing it
 ```
@@ -234,4 +250,4 @@ The integration smoke test starts the installed Pi in an isolated temporary RPC 
 
 The native PTY integration separately verifies a real Pi cold start, authenticated discovery, repeated-launch reuse, New session in normal TUI mode, stable URL and clean host exit. It uses a unique tmux server and temporary state, without Chrome, provider calls, real wake-lock changes or user-session changes. The APK builder checks signature and zip alignment.
 
-**Validation limits:** speech-to-Pi and the improved pinned icon have been confirmed during development. Automated tests validate browser logic/Markdown HTML, HTTP behavior and installed Pi integration. This Termux environment has no headless browser or adb/UI automation, so there is no pixel-level Chrome/WebView screenshot test. Image preparation is exercised with mocked decoding/canvas APIs; actual Android picker/canvas and real-model vision quality still need an on-phone check. The native launch/RUN_COMMAND connection and embedded chat are user-confirmed on the development phone. The updated image-request boundary has executable Java regression checks; its actual picker/thumbnail display still needs checking in the updated APK. Native microphone recognition, permission edge cases, keyboard/layout, repeated icon taps, process death and sustained vendor background survival need targeted device checks. The native installer helper opens Android's approval UI only when explicitly requested; it does not approve installation or runtime permissions.
+**Validation limits:** speech-to-Pi and the improved pinned icon have been confirmed during development. Automated tests validate browser logic/Markdown HTML, HTTP behavior and installed Pi integration. This Termux environment has no headless browser or adb/UI automation, so there is no pixel-level Chrome/WebView screenshot test. Image preparation is exercised with mocked decoding/canvas APIs; actual Android picker/canvas and real-model vision quality still need an on-phone check. The native launch/RUN_COMMAND connection and embedded chat are user-confirmed on the development phone. The updated image-request boundary has executable Java regression checks; its actual picker/thumbnail display still needs checking in the updated APK. Native microphone recognition, read-aloud voice playback/initialization/audio focus, permission edge cases, keyboard/layout, repeated icon taps, process death and sustained vendor background survival need targeted device checks. The native installer helper opens Android's approval UI only when explicitly requested; it does not approve installation or runtime permissions.

@@ -103,7 +103,10 @@ test('native Android contract has fixed background commands, non-exported result
   const manifest = await readFile(new URL('../native/AndroidManifest.xml', import.meta.url), 'utf8');
   const script = await readFile(new URL('../native/host.sh', import.meta.url), 'utf8');
   const methods = [...source.matchAll(/@JavascriptInterface public void (\w+)/g)].map((match) => match[1]);
-  assert.deepEqual(methods, ['startSpeech', 'stopSpeech', 'abortSpeech']);
+  assert.deepEqual(methods, ['speakText', 'stopReading', 'startSpeech', 'stopSpeech', 'abortSpeech']);
+  assert.match(manifest, /android.intent.action.TTS_SERVICE/);
+  assert.match(source, /replySpeaker\.shutdown\(\)/);
+  assert.match(source, /replySpeaker\.stop\(\);\s+web.onPause\(\)/);
   assert.match(source, /getBundleExtra\("result"\)/, 'Match TermuxConstants, not an invented result key');
   assert.match(source, /RUN_COMMAND_BACKGROUND", true/);
   assert.match(source, /RUN_COMMAND_BACKGROUND_CUSTOM_LOG_LEVEL", "0"/);

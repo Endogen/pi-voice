@@ -28,6 +28,21 @@ let newSessionRequest;
 let attachments = [];
 let preparingImages = false;
 let attachmentButtons = [];
+let readingSourceKey;
+const playback = globalThis.PiVoicePlayback.create({
+  onState: () => readingControls(),
+  onError: (code) => {
+    const hints = {
+      upgrade: 'Update Pi Voice Native to APK 0.1.2 or newer to read replies aloud.',
+      unsupported: 'Read aloud is unavailable here. Try Chrome or update the native app.',
+      language: 'No voice for this language. Check Read-aloud language in Settings and install a matching Android voice.',
+      'text-limit': 'This reply is too long to read aloud (maximum 32000 characters).',
+      'audio-busy': 'Audio is busy. Stop other playback and try Read aloud again.',
+      interrupted: 'Read aloud stopped.',
+    };
+    notice(hints[code] || 'Could not read the reply. Check your text-to-speech engine/installed voices and try again.', true);
+  },
+});
 const imageLimits = globalThis.PiVoiceImageLimits;
 const sessionStarting = () => Boolean(newSessionRequest || state?.newSessionAction?.status === 'starting');
 const nativeSpeech = Boolean(globalThis.PiVoiceNativeRecognition);
@@ -41,6 +56,9 @@ $('autosend').checked = storage.get('autosend') === 'true';
 $('language').value = storage.get('language') || navigator.language || 'en-US';
 $('engine').value = storage.get('engine') || (SpeechRecognition ? 'browser' : 'termux');
 $('awake').checked = storage.get('awake') !== 'false';
+$('read-language').value = storage.get('read-language') || navigator.language || 'en-US';
+$('read-language').disabled = !playback.supported;
+setText('read-support', playback.supported ? 'Tap Read aloud beside Pi’s completed reply to listen. Replies never play automatically.' : playback.needsUpgrade ? 'Update Pi Voice Native to APK 0.1.2 or newer to enable Read aloud.' : 'This browser does not provide speech playback. Try Chrome or the updated native app.');
 function speechHint() {
   return attachments.length ? 'Review images, then send' : $('autosend').checked ? 'Auto-send is on' : 'Review, then send';
 }
@@ -73,6 +91,31 @@ function controls() {
   $('abort').hidden = !working;
   $('abort').disabled = !working || sending;
   renderLatest(state?.messages || []);
+  readingControls();
+}
+function readingTarget() {
+  if (!state || state.busy || state.pending || sending || optimisticQuestion || sessionStarting()) return;
+  const { question, answer } = latestExchange(state.messages || []);
+  if (!answer?.text?.trim()) return;
+  return { text: answer.text, key: JSON.stringify([state.sessionId, question, answer]) };
+}
+function readingControls() {
+  const target = readingTarget();
+  if (playback.active && (!target || target.key !== readingSourceKey || listening)) playback.stop();
+  if (!playback.active) readingSourceKey = undefined;
+  $('read-aloud').hidden = !target && !playback.active;
+  $('read-aloud').disabled = !playback.supported || listening || (!target && !playback.active);
+  $('read-aloud').setAttribute('aria-pressed', String(playback.active));
+  $('read-aloud').setAttribute('aria-label', playback.active ? 'Stop reading Pi’s reply' : 'Read Pi’s latest reply aloud');
+  $('read-aloud').classList.toggle('active', playback.active);
+  setText('read-label', playback.active ? 'Stop reading' : 'Read aloud');
+}
+function readReply() {
+  if (playback.active) { playback.stop(); return; }
+  const target = readingTarget();
+  if (!target || listening || document.hidden) return;
+  readingSourceKey = target.key;
+  playback.speak(globalThis.PiVoiceMarkdown.speechText(target.text), $('read-language').value.trim());
 }
 function imageSupportError() {
   if (!state?.imageAttachments) return 'Restart Pi once to enable image attachments, then refresh this page.';
@@ -408,6 +451,7 @@ async function startSpeech() {
     return;
   }
   if (!connected || sending || preparingImages || sessionStarting()) return;
+  playback.stop(); // Never record Pi's own spoken answer into a new prompt.
   const base = $('draft').value;
   cancelSpeech = false;
   const originalSession = state.sessionId;
@@ -494,6 +538,11 @@ $('image-input').addEventListener('change', () => {
 });
 $('new-session').addEventListener('click', () => { void startNewSession(); });
 $('microphone').addEventListener('click', () => { void startSpeech(); });
+$('read-aloud').addEventListener('click', readReply);
+$('read-language').addEventListener('change', () => {
+  playback.stop();
+  storage.set('read-language', $('read-language').value.trim());
+});
 $('send').addEventListener('click', () => { void send(); });
 $('draft').addEventListener('input', controls);
 $('draft').addEventListener('keydown', (event) => {
@@ -525,8 +574,9 @@ for (const name of ['history', 'settings']) {
 document.addEventListener('visibilitychange', () => {
   if (!document.hidden) void poll();
   // Never auto-send a recording that was interrupted by switching apps.
-  else cancelRecording();
+  else { cancelRecording(); playback.stop(); }
 });
+window.addEventListener?.('pagehide', () => playback.stop());
 setInterval(() => { if (!document.hidden) void poll(); }, 1500);
 setAttachments([]);
 void poll();

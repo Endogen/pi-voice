@@ -9,6 +9,24 @@ for (const file of ['vendor/markdown-it/markdown-it.min.js', 'src/markdown.js'])
 }
 const render = (text) => context.PiVoiceMarkdown.render(text);
 
+test('speech text removes Markdown formatting and link destinations without using a DOM', () => {
+  const text = context.PiVoiceMarkdown.speechText('# Heading\n\n**Hello** *world*. [Docs](https://example.com/private) &amp; `inline code`.\n\n- [x] Done\n- [ ] Later');
+  assert.match(text, /^Heading\n/);
+  assert.match(text, /Hello world\. Docs & inline code\./);
+  assert.match(text, /Completed\. Done/);
+  assert.match(text, /Not completed\. Later/);
+  assert.doesNotMatch(text, /https:|\*\*|<h1>/);
+});
+
+test('speech text skips fenced/indented code, keeps image descriptions and separates table cells', () => {
+  const text = context.PiVoiceMarkdown.speechText('Before.\n\n```sh\nsecret command\n```\n\n    other command\n\n![diagram](https://example.com/pixel)\n\n| A | B |\n|---|---|\n| one | two |\n\nAfter.');
+  assert.equal((text.match(/Code block omitted\./g) || []).length, 2);
+  assert.match(text, /Image: diagram/);
+  assert.match(text, /one; two;/);
+  assert.match(text, /After\.$/);
+  assert.doesNotMatch(text, /secret command|other command|https:/);
+});
+
 test('renders headings, emphasis, strikethrough, rules and line breaks', () => {
   const html = render('# Title\n\n## Section\n\n**bold** *italic* ~~done~~\nnext line\n\n---');
   for (const part of ['<h1>Title</h1>', '<h2>Section</h2>', '<strong>bold</strong>', '<em>italic</em>', '<s>done</s>', '<br>', '<hr>']) {

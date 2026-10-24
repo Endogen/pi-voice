@@ -71,6 +71,7 @@ public final class MainActivity extends Activity {
     private ValueCallback<Uri[]> fileCallback;
     private SpeechRecognizer recognizer;
     private String speechId, speechLanguage;
+    private ReplySpeaker replySpeaker;
 
     @Override public void onCreate(Bundle state) {
         super.onCreate(state);
@@ -103,6 +104,7 @@ public final class MainActivity extends Activity {
         } else root.setFitsSystemWindows(true);
         setContentView(root);
         web = new WebView(this);
+        replySpeaker = new ReplySpeaker(this, handler, this::emitPlayback);
         web.setSaveEnabled(false);
         WebView.setWebContentsDebuggingEnabled(false);
         WebSettings settings = web.getSettings();
@@ -176,6 +178,7 @@ public final class MainActivity extends Activity {
     private void connect() {
         if (destroyed) return;
         cancelSpeech("aborted");
+        replySpeaker.stop();
         if (connectionResult != null) connectionResult.cancel();
         nonce = null;
         loading("Connecting to Termux…");
@@ -260,6 +263,10 @@ public final class MainActivity extends Activity {
     }
 
     private final class LocalClient extends WebViewClient {
+        @Override public void onPageStarted(WebView view, String url, android.graphics.Bitmap icon) {
+            pageReady = false;
+            replySpeaker.stop();
+        }
         @Override public boolean shouldOverrideUrlLoading(WebView view, WebResourceRequest request) {
             Uri url = request.getUrl();
             if (trusted(url) && "/".equals(url.getPath())) return false;
@@ -336,11 +343,24 @@ public final class MainActivity extends Activity {
     // Intentionally no command, URL, token, filesystem or navigation methods.
     // The only JavaScript capability is native speech on our authenticated page.
     public final class SpeechBridge {
+        @JavascriptInterface public void speakText(String id, String text, String language) {
+            if (id == null || !id.matches("[a-fA-F0-9-]{36}")) return;
+            handler.post(() -> {
+                if (!trustedPage()) return;
+                if (!resumed || !web.hasWindowFocus()) { emitPlayback(id, "error", "interrupted"); return; }
+                cancelSpeech("aborted");
+                replySpeaker.speak(id, text, language);
+            });
+        }
+        @JavascriptInterface public void stopReading(String id) {
+            handler.post(() -> { if (trustedPage()) replySpeaker.stop(id); });
+        }
         @JavascriptInterface public void startSpeech(String id, String language) {
             if (id == null || !id.matches("[a-fA-F0-9-]{36}")) return;
             handler.post(() -> {
                 if (!trustedPage()) return;
                 if (!resumed || !web.hasWindowFocus()) { emitSpeech(id, "error", "aborted"); emitSpeech(id, "end", ""); return; }
+                replySpeaker.stop();
                 cancelSpeech("aborted"); speechId = id;
                 speechLanguage = language != null && language.matches("[a-zA-Z0-9-]{2,35}") ? language : "en-US";
                 if (checkSelfPermission(Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED) requestPermissions(new String[]{Manifest.permission.RECORD_AUDIO}, MICROPHONE_PERMISSION);
@@ -359,6 +379,12 @@ public final class MainActivity extends Activity {
         @JavascriptInterface public void abortSpeech(String id) {
             handler.post(() -> { if (trustedPage() && id != null && id.equals(speechId)) cancelSpeech("aborted"); });
         }
+    }
+
+    private void emitPlayback(String id, String kind, String detail) {
+        if (!trustedPage()) return;
+        String script = "window.__piVoiceNativePlayback && window.__piVoiceNativePlayback(" + JSONObject.quote(id) + "," + JSONObject.quote(kind) + "," + JSONObject.quote(detail == null ? "" : detail) + ")";
+        web.evaluateJavascript(script, null);
     }
 
     private void emitSpeech(String id, String kind, String text) {
@@ -439,6 +465,7 @@ public final class MainActivity extends Activity {
         resumed = false;
         // Never auto-send speech interrupted by switching apps or picking a file.
         if (recognizer != null) cancelSpeech("aborted");
+        replySpeaker.stop();
         web.onPause(); web.pauseTimers();
         super.onPause();
     }
@@ -454,6 +481,7 @@ public final class MainActivity extends Activity {
 
     @Override protected void onDestroy() {
         cancelSpeech("aborted");
+        replySpeaker.shutdown();
         destroyed = true;
         if (active.get() == this) active.clear();
         if (connectionResult != null) connectionResult.cancel();

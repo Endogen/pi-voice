@@ -24,7 +24,7 @@ class Element {
   click() { this.clicked = (this.clicked || 0) + 1; return this.listeners.click?.(); }
   scrollIntoView() { throw new Error('Conversation updates must not force-scroll.'); }
 }
-async function setup({ auto = false, speech = true, awake = true, confirmed = true, native = false } = {}) {
+async function setup({ auto = false, speech = true, awake = true, confirmed = true, native = false, playback = false, nativePlayback = true } = {}) {
   const elements = new Map();
   const prompts = [];
   const instances = [];
@@ -33,7 +33,14 @@ async function setup({ auto = false, speech = true, awake = true, confirmed = tr
     startSpeech: (id, lang) => nativeCalls.push({ method: 'start', id, lang }),
     stopSpeech: (id) => nativeCalls.push({ method: 'stop', id }),
     abortSpeech: (id) => nativeCalls.push({ method: 'abort', id }),
+    ...(nativePlayback ? {
+      speakText: (id, text, language) => nativeCalls.push({ method: 'read', id, text, language }),
+      stopReading: (id) => nativeCalls.push({ method: 'stop-reading', id }),
+    } : {}),
   } : undefined;
+  const utterances = [];
+  class Utterance { constructor(text) { this.text = text; } }
+  const synthesis = { cancellations: 0, speak: (utterance) => utterances.push(utterance), cancel() { this.cancellations++; } };
   const values = new Map([['pi-voice-autosend', String(auto)], ['pi-voice-awake', String(awake)]]);
   const state = { sessionId: 'session-one', sessionName: 'Test', cwd: '/project', model: 'test/test', busy: false, messages: [], imageAttachments: true, modelSupportsImages: true };
   const imageProcessing = {
@@ -78,13 +85,15 @@ async function setup({ auto = false, speech = true, awake = true, confirmed = tr
     addEventListener(event, callback) { this.listeners[event] = callback; },
   };
   const context = vm.createContext({
-    document, window: { SpeechRecognition: speech ? Speech : undefined, PiVoiceAndroid: nativeBridge, innerHeight: 900, scrollY: 0 },
+    document, window: { SpeechRecognition: speech ? Speech : undefined, PiVoiceAndroid: nativeBridge, innerHeight: 900, scrollY: 0,
+      speechSynthesis: playback ? synthesis : undefined, SpeechSynthesisUtterance: playback ? Utterance : undefined },
     location: { hash: '#test-token', pathname: '/' }, history: { replaceState() {} },
     localStorage: { getItem: (key) => values.get(key), setItem: (key, value) => values.set(key, value) },
     navigator: { language: 'en-US' }, crypto: { randomUUID }, AbortController,
     FileReader: Reader,
     createImageBitmap: async (file, options) => { imageProcessing.calls.push({ file, options }); return imageProcessing.decode(file); },
-    setInterval() {}, confirm: (message) => { confirmations.push(message); return confirmed; },
+    setInterval() {}, setTimeout: (fn, ms) => { const timer = setTimeout(fn, ms); timer.unref(); return timer; }, clearTimeout,
+    confirm: (message) => { confirmations.push(message); return confirmed; },
     async fetch(path, options) {
       const body = options.body ? JSON.parse(options.body) : undefined;
       requests.push({ path, body });
@@ -100,7 +109,7 @@ async function setup({ auto = false, speech = true, awake = true, confirmed = tr
   });
   vm.runInContext(source, context);
   await flush();
-  return { elements, prompts, instances, nativeCalls, state, context, document, values, network, requests, confirmations, imageProcessing, el: (id) => elements.get(id) };
+  return { elements, prompts, instances, nativeCalls, state, context, document, values, network, requests, confirmations, imageProcessing, utterances, synthesis, el: (id) => elements.get(id) };
 }
 function result(text, final = true) {
   return { results: [Object.assign([{ transcript: text }], { isFinal: final })] };
@@ -111,6 +120,116 @@ async function attach(h, files = [photo()]) {
   h.context.selectedFiles = files;
   await vm.runInContext('addImages(selectedFiles)', h.context);
 }
+
+async function completedReply(h, text = '**Hello** from Pi. [Docs](https://example.com).') {
+  h.state.messages = [{ role: 'user', text: 'Question' }, { role: 'assistant', text }];
+  await vm.runInContext('poll()', h.context);
+}
+
+test('Read aloud is manual, speaks the completed reply without Markdown and never sends a prompt', async () => {
+  const h = await setup({ playback: true });
+  assert.equal(h.el('read-aloud').hidden, true);
+  await completedReply(h);
+  assert.equal(h.utterances.length, 0, 'No autoplay on polling or reconnect');
+  assert.equal(h.el('read-aloud').disabled, false);
+  h.el('read-aloud').click();
+  assert.equal(h.utterances[0].text, 'Hello from Pi. Docs.');
+  assert.equal(h.el('read-label').textContent, 'Stop reading');
+  assert.equal(h.el('read-aloud').attributes['aria-pressed'], 'true');
+  assert.equal(h.prompts.length, 0);
+  await vm.runInContext('poll()', h.context);
+  assert.equal(h.utterances.length, 1, 'Unchanged polling does not restart playback');
+  h.utterances[0].onend();
+  assert.equal(h.el('read-label').textContent, 'Read aloud');
+  assert.equal(h.el('read-aloud').attributes['aria-pressed'], 'false');
+});
+
+test('native Read aloud uses Android TTS, ignores old events and keeps recording separate', async () => {
+  const h = await setup({ playback: true, native: true });
+  await completedReply(h);
+  h.el('read-language').value = 'de-DE';
+  h.el('read-language').listeners.change();
+  assert.equal(h.values.get('pi-voice-read-language'), 'de-DE');
+  h.el('read-aloud').click();
+  const reading = h.nativeCalls.at(-1);
+  assert.equal(reading.method, 'read');
+  assert.equal(reading.text, 'Hello from Pi. Docs.');
+  assert.equal(reading.language, 'de-DE');
+  assert.equal(h.utterances.length, 0);
+  h.el('read-aloud').click();
+  assert.equal(h.nativeCalls.at(-1).method, 'stop-reading');
+  assert.equal(h.nativeCalls.at(-1).id, reading.id);
+  h.context.window.__piVoiceNativePlayback(reading.id, 'error', 'unavailable');
+  assert.equal(h.el('read-label').textContent, 'Read aloud');
+  assert.doesNotMatch(h.el('notice').textContent, /Could not read/);
+  assert.equal(h.prompts.length, 0);
+});
+
+test('old native shells explain the APK upgrade instead of relying on WebView synthesis', async () => {
+  const h = await setup({ playback: true, native: true, nativePlayback: false });
+  await completedReply(h);
+  assert.equal(h.el('read-aloud').disabled, true);
+  assert.match(h.el('read-support').textContent, /APK 0\.1\.2/);
+  assert.equal(h.utterances.length, 0);
+});
+
+test('starting the microphone stops playback and cannot read a reply into a new prompt', async () => {
+  const h = await setup({ playback: true });
+  await completedReply(h);
+  h.el('read-aloud').click();
+  h.el('microphone').click();
+  assert.equal(h.synthesis.cancellations, 1);
+  assert.equal(h.el('read-aloud').disabled, true);
+  h.el('read-aloud').click();
+  assert.equal(h.utterances.length, 1);
+  h.instances[0].abort();
+  assert.equal(h.prompts.length, 0);
+});
+
+test('leaving the app stops playback and returning never auto-resumes it', async () => {
+  const h = await setup({ playback: true });
+  await completedReply(h, 'Long answer. '.repeat(80));
+  h.el('read-aloud').click();
+  const old = h.utterances[0];
+  h.document.hidden = true;
+  h.document.listeners.visibilitychange();
+  assert.equal(h.synthesis.cancellations, 1);
+  old.onend();
+  h.document.hidden = false;
+  h.document.listeners.visibilitychange();
+  await flush();
+  assert.equal(h.utterances.length, 1);
+  assert.equal(h.el('read-label').textContent, 'Read aloud');
+});
+
+for (const change of ['reply', 'session', 'busy', 'send']) {
+  test(`reading stops when ${change} changes the displayed reply context`, async () => {
+    const h = await setup({ playback: true });
+    await completedReply(h);
+    h.el('read-aloud').click();
+    if (change === 'reply') h.state.messages[1].text = 'A new reply';
+    if (change === 'session') h.state.sessionId = 'session-two';
+    if (change === 'busy') h.state.busy = true;
+    if (change === 'send') { h.el('draft').value = 'Next question'; await vm.runInContext('send()', h.context); }
+    else await vm.runInContext('poll()', h.context);
+    assert.equal(h.synthesis.cancellations, 1);
+    assert.equal(h.el('read-label').textContent, 'Read aloud');
+  });
+}
+
+test('speech playback errors preserve the reply and draft and permit manual retry', async () => {
+  const h = await setup({ playback: true });
+  await completedReply(h);
+  h.el('draft').value = 'Unsent draft';
+  h.el('read-aloud').click();
+  h.utterances[0].onerror({ error: 'synthesis-unavailable' });
+  assert.match(h.el('notice').textContent, /Could not read/);
+  assert.equal(h.el('draft').value, 'Unsent draft');
+  assert.equal(h.el('read-aloud').disabled, false);
+  h.el('read-aloud').click();
+  assert.equal(h.utterances.length, 2);
+  h.el('read-aloud').click();
+});
 
 test('picker prepares bounded JPEG previews, sends text plus images and clears only after acceptance', async () => {
   const h = await setup();

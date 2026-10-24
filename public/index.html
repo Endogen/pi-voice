@@ -31,6 +31,7 @@
         <h2 id="answer-heading">Pi’s reply</h2>
         <div id="thinking" class="thinking" role="status" aria-live="polite" hidden><span class="thinking-dots" aria-hidden="true"><i></i><i></i><i></i></span><span id="thinking-label">Pi is thinking…</span></div>
         <button id="abort" class="quiet stop-button" disabled hidden>Stop Pi</button>
+        <button id="read-aloud" class="quiet read-button" aria-pressed="false" title="Read Pi’s latest completed reply aloud" disabled hidden><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m11 5-6 4H2v6h3l6 4V5ZM15 8a6 6 0 0 1 0 8M18 5a10 10 0 0 1 0 14"/></svg><span id="read-label">Read aloud</span></button>
       </div>
       <div id="latest-answer" class="answer-pane empty-answer" tabindex="0" aria-label="Pi’s latest reply" aria-busy="false"><p>Your conversation belongs here.</p><p class="muted">Tap Speak or type a question below.</p></div>
     </section>
@@ -71,6 +72,13 @@
         <label id="speech-language-label" for="language">Browser speech language</label>
         <input id="language" type="text" value="en-US" maxlength="35" placeholder="en-US, de-DE, …" autocapitalize="off" spellcheck="false">
         <p class="hint">Android fallback uses the Termux:API language. Allow microphone access when Android asks. Your speech provider may process audio online; this app stores no audio.</p>
+      </section>
+      <section class="settings-section" aria-label="Read replies aloud">
+        <h3>Voice output</h3>
+        <p id="read-support" class="hint">Tap Read aloud beside Pi’s reply to listen. Replies never play automatically.</p>
+        <label for="read-language">Read-aloud language</label>
+        <input id="read-language" type="text" value="en-US" maxlength="35" placeholder="en-US, de-DE, …" autocapitalize="off" spellcheck="false">
+        <p class="hint">Uses Android text-to-speech in the native app, or your browser’s speech engine. Install a voice in Android’s text-to-speech settings if needed. Your selected speech provider may process the reply online. Code blocks are skipped; the text remains visible. Playback stops when you leave the app, start speaking or switch replies.</p>
       </section>
       <section class="settings-section" aria-label="Background operation">
         <h3>Keep Pi available</h3>

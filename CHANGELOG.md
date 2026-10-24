@@ -1,5 +1,15 @@
 # Changelog
 
+## 1.7.0 — native APK 0.1.2 (versionCode 3)
+
+- **Optional Read aloud / Stop reading** beside Pi's latest completed reply. Nothing plays automatically, and playback makes no model request or chat submission.
+- **Native Android TTS** with foreground/trusted-page checks, language/length validation, bounded Unicode-safe chunks, audio-focus handling, initialization/progress timeouts and cleanup on pause/navigation/destruction. Chrome uses browser synthesis where supported; older native shells request an APK update instead of relying on WebView synthesis.
+- **Voice output settings** remember a separate reading language. Missing voices/service errors leave the reply/draft unchanged and permit manual retry. The selected Android/browser speech provider may process reply text online.
+- **Speech-safe context changes:** starting the microphone, sending, switching replies/sessions or backgrounding stops playback; late callbacks cannot restart it. Markdown formatting/link destinations are omitted, descriptions remain, and code blocks are skipped.
+- **Regression coverage:** browser/native playback simulations, cancellation/stale-event/timeout/language/error tests, UI recording/session/background guards, Markdown-to-speech checks and executable Java speech-chunk/Unicode checks. Build and isolated Pi integrations do not prove actual on-phone voice output.
+
+Refresh/reopen the frontend for browser output. Native output requires the same-key APK **0.1.2** update (`npm run native:install`, after the current response finishes); Android asks for approval. No Pi backend restart is needed specifically for read aloud. No installer, voice playback or live-session restart is performed automatically.
+
 ## 1.6.1 — native APK 0.1.1 (versionCode 2)
 
 Verified fixes from the first installed-native-app audit:

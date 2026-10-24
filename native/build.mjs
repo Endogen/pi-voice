@@ -6,8 +6,9 @@ import { fileURLToPath } from 'node:url';
 import { homedir } from 'node:os';
 import { randomBytes, createHash } from 'node:crypto';
 
-// Fail a native build if the executable request-boundary regression checks fail.
+// Fail a native build if request-boundary or speech-chunk regression checks fail.
 await import('./test-policy.mjs');
+await import('./test-speech.mjs');
 
 const exec = promisify(execFile);
 const root = fileURLToPath(new URL('./', import.meta.url));

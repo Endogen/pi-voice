@@ -93,7 +93,25 @@ globalThis.PiVoiceMarkdown = (() => {
   md.renderer.rules.voice_checkbox = (tokens, index) => tokens[index].meta.checked
     ? '<input type="checkbox" checked disabled aria-label="Completed"> '
     : '<input type="checkbox" disabled aria-label="Not completed"> ';
-  return Object.freeze({ render: (text) => md.render(String(text)) });
+  function speechText(text) {
+    // Parse tokens directly: never insert model text into a live DOM to extract
+    // speech. Speak link labels, not destinations; skip fenced code blocks.
+    const inline = (tokens) => (tokens || []).map((token) => {
+      if (token.type === 'text' || token.type === 'code_inline') return token.content;
+      if (token.type === 'softbreak' || token.type === 'hardbreak') return '\n';
+      if (token.type === 'image') return `Image: ${inline(token.children) || token.content}. `;
+      if (token.type === 'voice_checkbox') return token.meta.checked ? 'Completed. ' : 'Not completed. ';
+      return token.children ? inline(token.children) : '';
+    }).join('');
+    return md.parse(String(text), {}).map((token) => {
+      if (token.type === 'inline') return inline(token.children);
+      if (token.type === 'fence' || token.type === 'code_block') return 'Code block omitted.\n';
+      if (token.type === 'td_close' || token.type === 'th_close') return '; ';
+      if (token.block && token.nesting === -1 || token.type === 'hr') return '\n';
+      return '';
+    }).join('').replace(/[ \t]+/g, ' ').replace(/ *\n */g, '\n').replace(/\n{3,}/g, '\n\n').trim();
+  }
+  return Object.freeze({ render: (text) => md.render(String(text)), speechText });
 })();
 
 ;
@@ -129,6 +147,106 @@ globalThis.PiVoiceImageLimits = Object.freeze({"maxCount":4,"maxImageBytes":3145
 })();
 
 ;
+// User-initiated reply playback only. No model request, audio upload or autoplay.
+globalThis.PiVoicePlayback = (() => {
+  const maxText = 32000;
+  function chunks(text, limit = 320) {
+    if (!Number.isInteger(limit) || limit < 2) throw new Error('Invalid speech chunk size.');
+    const parts = [];
+    for (let start = 0; start < text.length;) {
+      let end = Math.min(start + limit, text.length);
+      if (end < text.length && /[\uD800-\uDBFF]/.test(text[end - 1]) && /[\uDC00-\uDFFF]/.test(text[end])) end--;
+      if (end < text.length) {
+        const pause = Math.max(text.lastIndexOf('\n', end - 1), text.lastIndexOf(' ', end - 1));
+        if (pause > start + limit / 2) end = pause + 1;
+      }
+      parts.push(text.slice(start, end));
+      start = end;
+    }
+    return parts;
+  }
+  function create({ onState = () => {}, onError = () => {} } = {}) {
+    const bridge = window.PiVoiceAndroid;
+    const native = Boolean(bridge && typeof bridge.speakText === 'function' && typeof bridge.stopReading === 'function');
+    // Older native shells must upgrade, rather than silently trying WebView's
+    // often unavailable browser synthesis implementation.
+    const synthesis = !bridge && window.speechSynthesis;
+    const Utterance = window.SpeechSynthesisUtterance;
+    const supported = native || Boolean(synthesis && typeof synthesis.speak === 'function' && typeof synthesis.cancel === 'function' && typeof Utterance === 'function');
+    let active, timer;
+    function clearTimer() { if (timer !== undefined) clearTimeout(timer); timer = undefined; }
+    function stop() {
+      const previous = active;
+      active = undefined;
+      clearTimer();
+      if (!previous) return;
+      try { if (native) bridge.stopReading(previous.id); else synthesis.cancel(); } catch {}
+      onState();
+    }
+    function fail(code) { stop(); onError(String(code || 'unavailable')); }
+    function arm(run, milliseconds) {
+      clearTimer();
+      timer = setTimeout(() => { if (active === run) fail('unavailable'); }, milliseconds);
+    }
+    function finish(run) {
+      if (active !== run) return;
+      active = undefined;
+      clearTimer();
+      onState();
+    }
+    if (native) window.__piVoiceNativePlayback = (id, kind, detail) => {
+      const run = active;
+      if (!run || id !== run.id) return;
+      if (kind === 'start' || kind === 'progress') arm(run, 180000);
+      else if (kind === 'end') finish(run);
+      else if (kind === 'error') fail(detail);
+    };
+    function speak(text, language) {
+      stop();
+      if (!supported) { onError(bridge ? 'upgrade' : 'unsupported'); return; }
+      text = String(text).trim();
+      if (!text || text.length > maxText) { onError('text-limit'); return; }
+      try { language = Intl.getCanonicalLocales(language || navigator.language || 'en-US')[0]; }
+      catch { onError('language'); return; }
+      const run = { id: crypto.randomUUID() };
+      active = run;
+      onState();
+      try {
+        if (native) {
+          arm(run, 20000);
+          bridge.speakText(run.id, text, language);
+        } else {
+          const parts = chunks(text);
+          let index = 0;
+          const next = () => {
+            if (active !== run) return;
+            const utterance = new Utterance(parts[index++]);
+            run.utterance = utterance;
+            utterance.lang = language;
+            utterance.onend = () => {
+              if (active !== run || run.utterance !== utterance) return;
+              run.utterance = undefined; // Ignore duplicate/late end callbacks.
+              if (index < parts.length) next(); else finish(run);
+            };
+            utterance.onerror = (event) => {
+              if (active === run && run.utterance === utterance) fail(event.error);
+            };
+            arm(run, 120000);
+            synthesis.speak(utterance);
+          };
+          // The first speak stays in the click handler for browser user-gesture
+          // requirements. Later chunks follow only that explicit request.
+          synthesis.resume?.(); // A previously interrupted engine may remain paused.
+          next();
+        }
+      } catch { if (active === run) fail('unavailable'); }
+    }
+    return Object.freeze({ supported, needsUpgrade: Boolean(bridge && !native), get active() { return Boolean(active); }, speak, stop });
+  }
+  return Object.freeze({ create, chunks, maxText });
+})();
+
+;
 'use strict';
 const $ = (id) => document.getElementById(id);
 function setText(id, text) { const node = $(id); if (node.textContent !== text) node.textContent = text; }
@@ -159,6 +277,21 @@ let newSessionRequest;
 let attachments = [];
 let preparingImages = false;
 let attachmentButtons = [];
+let readingSourceKey;
+const playback = globalThis.PiVoicePlayback.create({
+  onState: () => readingControls(),
+  onError: (code) => {
+    const hints = {
+      upgrade: 'Update Pi Voice Native to APK 0.1.2 or newer to read replies aloud.',
+      unsupported: 'Read aloud is unavailable here. Try Chrome or update the native app.',
+      language: 'No voice for this language. Check Read-aloud language in Settings and install a matching Android voice.',
+      'text-limit': 'This reply is too long to read aloud (maximum 32000 characters).',
+      'audio-busy': 'Audio is busy. Stop other playback and try Read aloud again.',
+      interrupted: 'Read aloud stopped.',
+    };
+    notice(hints[code] || 'Could not read the reply. Check your text-to-speech engine/installed voices and try again.', true);
+  },
+});
 const imageLimits = globalThis.PiVoiceImageLimits;
 const sessionStarting = () => Boolean(newSessionRequest || state?.newSessionAction?.status === 'starting');
 const nativeSpeech = Boolean(globalThis.PiVoiceNativeRecognition);
@@ -172,6 +305,9 @@ $('autosend').checked = storage.get('autosend') === 'true';
 $('language').value = storage.get('language') || navigator.language || 'en-US';
 $('engine').value = storage.get('engine') || (SpeechRecognition ? 'browser' : 'termux');
 $('awake').checked = storage.get('awake') !== 'false';
+$('read-language').value = storage.get('read-language') || navigator.language || 'en-US';
+$('read-language').disabled = !playback.supported;
+setText('read-support', playback.supported ? 'Tap Read aloud beside Pi’s completed reply to listen. Replies never play automatically.' : playback.needsUpgrade ? 'Update Pi Voice Native to APK 0.1.2 or newer to enable Read aloud.' : 'This browser does not provide speech playback. Try Chrome or the updated native app.');
 function speechHint() {
   return attachments.length ? 'Review images, then send' : $('autosend').checked ? 'Auto-send is on' : 'Review, then send';
 }
@@ -204,6 +340,31 @@ function controls() {
   $('abort').hidden = !working;
   $('abort').disabled = !working || sending;
   renderLatest(state?.messages || []);
+  readingControls();
+}
+function readingTarget() {
+  if (!state || state.busy || state.pending || sending || optimisticQuestion || sessionStarting()) return;
+  const { question, answer } = latestExchange(state.messages || []);
+  if (!answer?.text?.trim()) return;
+  return { text: answer.text, key: JSON.stringify([state.sessionId, question, answer]) };
+}
+function readingControls() {
+  const target = readingTarget();
+  if (playback.active && (!target || target.key !== readingSourceKey || listening)) playback.stop();
+  if (!playback.active) readingSourceKey = undefined;
+  $('read-aloud').hidden = !target && !playback.active;
+  $('read-aloud').disabled = !playback.supported || listening || (!target && !playback.active);
+  $('read-aloud').setAttribute('aria-pressed', String(playback.active));
+  $('read-aloud').setAttribute('aria-label', playback.active ? 'Stop reading Pi’s reply' : 'Read Pi’s latest reply aloud');
+  $('read-aloud').classList.toggle('active', playback.active);
+  setText('read-label', playback.active ? 'Stop reading' : 'Read aloud');
+}
+function readReply() {
+  if (playback.active) { playback.stop(); return; }
+  const target = readingTarget();
+  if (!target || listening || document.hidden) return;
+  readingSourceKey = target.key;
+  playback.speak(globalThis.PiVoiceMarkdown.speechText(target.text), $('read-language').value.trim());
 }
 function imageSupportError() {
   if (!state?.imageAttachments) return 'Restart Pi once to enable image attachments, then refresh this page.';
@@ -539,6 +700,7 @@ async function startSpeech() {
     return;
   }
   if (!connected || sending || preparingImages || sessionStarting()) return;
+  playback.stop(); // Never record Pi's own spoken answer into a new prompt.
   const base = $('draft').value;
   cancelSpeech = false;
   const originalSession = state.sessionId;
@@ -625,6 +787,11 @@ $('image-input').addEventListener('change', () => {
 });
 $('new-session').addEventListener('click', () => { void startNewSession(); });
 $('microphone').addEventListener('click', () => { void startSpeech(); });
+$('read-aloud').addEventListener('click', readReply);
+$('read-language').addEventListener('change', () => {
+  playback.stop();
+  storage.set('read-language', $('read-language').value.trim());
+});
 $('send').addEventListener('click', () => { void send(); });
 $('draft').addEventListener('input', controls);
 $('draft').addEventListener('keydown', (event) => {
@@ -656,8 +823,9 @@ for (const name of ['history', 'settings']) {
 document.addEventListener('visibilitychange', () => {
   if (!document.hidden) void poll();
   // Never auto-send a recording that was interrupted by switching apps.
-  else cancelRecording();
+  else { cancelRecording(); playback.stop(); }
 });
+window.addEventListener?.('pagehide', () => playback.stop());
 setInterval(() => { if (!document.hidden) void poll(); }, 1500);
 setAttachments([]);
 void poll();

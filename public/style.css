@@ -28,6 +28,8 @@ svg { width: 21px; height: 21px; stroke: currentColor; fill: none; stroke-width:
 .answer-toolbar { display: flex; align-items: center; gap: 8px; min-height: 44px; padding-left: 2px; flex-shrink: 0; }
 .answer-toolbar h2 { color: var(--muted); white-space: nowrap; }
 .stop-button { min-width: 44px; margin-left: auto; padding: 8px; font-size: .8rem; color: #ffb5be !important; }
+.read-button { margin-left: auto; padding: 8px; font-size: .8rem; }
+button.read-button.active { color: var(--accent); background: var(--raised); }
 .thinking { display: inline-flex; align-items: center; gap: 7px; min-width: 0; color: var(--accent); font-size: .77rem; }
 #thinking-label { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .thinking-dots { display: inline-flex; gap: 3px; align-items: center; height: 16px; flex-shrink: 0; }
