@@ -1,6 +1,19 @@
 Pi Voice icon — approved concept B
-Generated using the built-in image_gen tool; icon.png is the original output.
-The 512px and 192px exports retain the approved design and colors.
+Generated using the built-in image_gen tool; icon.png is the original opaque reference.
+icon-transparent.png is the approved transparent master (1254 x 1254).
+The public/ 512px and 192px exports preserve the master's full canvas and original icon framing.
+GitHub Pages favicons use a 949 x 949 crop at x=153, y=152, keeping the whole microphone and a small margin without stretching its proportions. Exports are 16px, 32px and 192px PNGs with alpha.
+
+Export commands (macOS sips):
+sips -z 512 512 artwork/icon-transparent.png --out public/icon-512.png
+sips -z 192 192 artwork/icon-transparent.png --out public/icon-192.png
+sips --cropToHeightWidth 949 949 --cropOffset 152 153 artwork/icon-transparent.png --out /tmp/pi-voice-favicon-cropped.png
+sips -z 192 192 /tmp/pi-voice-favicon-cropped.png --out docs/assets/favicon-192.png
+sips -z 32 32 /tmp/pi-voice-favicon-cropped.png --out docs/assets/favicon-32.png
+sips -z 16 16 /tmp/pi-voice-favicon-cropped.png --out docs/assets/favicon-16.png
+
+Transparent edit instructions:
+Remove only the dark navy background, including the gap between capsule and cradle. Keep the navy pi opaque. Preserve the 1254 x 1254 canvas, original microphone scale, position, colors and padding. Clean the transparency mask without redrawing, cropping or adding effects.
 
 Prompt:
 Use case: logo-brand. Generate ONE polished square Android app icon concept for Pi Voice, a voice interface to the Pi coding agent. Combine the recognizable mathematical lowercase Greek pi symbol π with a recognizable microphone in a single coherent logo. Existing app palette is dark navy #141b2d and periwinkle blue #8eafff. A bold, distinctive silhouette that reads well at 48 pixels, precise edges, generous safe margins (all meaningful artwork within the central 65% of the canvas). Straight-on, full-bleed square artwork, no phone mockup, no surrounding presentation board, no labels, no words, no watermark, no additional symbols. The only typographic element is the pi symbol itself.
