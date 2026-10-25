@@ -200,6 +200,11 @@ label { display: block; margin: 14px 0 6px; font-size: .88rem; font-weight: 550;
 .switch input:checked::before { transform: translateX(18px); background: var(--primary-fg); }
 .switch input:disabled { opacity: .4; }
 select, input[type=text] { width: 100%; min-height: 44px; padding: 0 12px; border: 1px solid var(--border-strong); border-radius: 10px; background: var(--bg); font-size: 16px; }
+.model-controls { margin-top: 16px; }
+.model-actions { display: flex; flex-wrap: wrap; gap: 8px; }
+.model-actions button { flex: 1; min-height: 44px; padding: 8px 12px; border: 1px solid var(--border-strong); border-radius: 10px; background: var(--surface-2); }
+.model-actions #model-apply { color: var(--accent); }
+.model-details { overflow-wrap: anywhere; }
 select:focus, input[type=text]:focus { outline: 0; border-color: var(--accent); box-shadow: 0 0 0 3px rgb(147 180 255 / .15); }
 .session strong { display: block; font-size: .92rem; }
 .session small { display: block; color: var(--muted); font-size: .8rem; overflow-wrap: anywhere; margin-top: 4px; }

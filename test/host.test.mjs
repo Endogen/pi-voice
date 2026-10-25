@@ -177,3 +177,35 @@ test('a reserved host port conflict fails instead of changing origin or disturbi
   assert.equal(h.processes.get(worker.handle).child.exitCode, null);
   assert.equal((await openRegistry(h.directory)).data.port, port);
 });
+
+test('host model switching is explicit-target, isolated per process, capability-aware and history preserving', async (t) => {
+  const h = await fixture(t); const first = await h.ready();
+  const spawn = await h.request('session/spawn', { id: randomUUID() }, first);
+  const second = await h.ready(spawn.data.handle);
+  assert.equal((await h.request('models')).status, 400, 'Model listing must not silently target another session');
+  assert.equal((await h.request('models', undefined, { ...first, instanceId: 'stale' })).status, 409);
+  assert.equal((await h.request('prompt', { id: randomUUID(), sessionId: first.sessionId, text: 'Keep my history' }, first)).status, 200);
+  const list = await h.request('models', undefined, first);
+  assert.equal(list.status, 200);
+  assert.equal(list.data.models.length, 2);
+  const body = { sessionId: first.sessionId, provider: 'custom-local', id: 'generic/model:Q5', expectedModel: list.data.current };
+  assert.equal((await h.request('model', body, first)).status, 409, 'Busy worker must not change models');
+  h.processes.get(first.handle).child.send('finish');
+  const before = await until(async () => { const state = (await h.request('state', undefined, first)).data; return !state.busy && state.messages.length === 2 ? state : null; }, 'first turn completion');
+  assert.equal((await h.request('model', body)).status, 400);
+  assert.equal((await h.request('model', body, { ...first, instanceId: 'old-process' })).status, 409);
+  assert.equal((await h.request('model', { ...body, sessionId: 'stale-conversation' }, first)).status, 409);
+  const selected = await h.request('model', body, first);
+  assert.equal(selected.status, 200);
+  const after = (await h.request('state', undefined, first)).data;
+  assert.equal(after.model, 'custom-local/generic/model:Q5');
+  assert.equal(after.modelSupportsImages, true);
+  assert.equal(after.modelSwitchingSupported, true);
+  assert.equal(after.modelSwitching, false);
+  assert.deepEqual(after.messages, before.messages);
+  assert.equal(after.sessionId, before.sessionId);
+  const untouched = (await h.request('state', undefined, second)).data;
+  assert.equal(untouched.model, 'test/deterministic');
+  assert.equal(untouched.modelSupportsImages, false);
+  assert.equal((await h.request('model', { ...body, id: 'different', expectedModel: list.data.current }, first)).status, 409, 'Old model snapshots cannot override a later choice');
+});

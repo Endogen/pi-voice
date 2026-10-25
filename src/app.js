@@ -166,9 +166,21 @@ function notice(text, error = false) {
 const sessionReady = () => connected && !switchPending && Boolean(state?.handle) && !state?.empty;
 const busyHere = () => Boolean(state?.busy || state?.pending || optimisticQuestion);
 const currentHandle = () => state?.handle;
+const modelPicker = globalThis.PiVoiceModelPicker.create({
+  element: $, createElement: (tag) => document.createElement(tag), request: api,
+  target: () => ({ key: JSON.stringify([selectionVersion, targetHandle, state?.instanceId, state?.sessionId]), handle: state?.handle, sessionId: state?.sessionId }),
+  state: () => state,
+  blockedReason: () => !sessionReady() ? 'Connect a ready Pi session before changing models.'
+    : state.modelSwitching ? 'A model change is in progress. Wait for Pi to confirm it.'
+      : sessionStarting() || spawnRequest ? 'Wait for the new session to be ready.'
+        : busyHere() || sending ? 'Finish or stop the current task before changing models.'
+          : listening || preparingImages ? 'Finish recording or preparing images before changing models.' : '',
+  changed: controls, refresh: poll, notify: notice, confirm: (text) => confirm(text), hasImages: () => attachments.length > 0,
+});
+const modelChanging = () => Boolean(state?.modelSwitching || modelPicker.busy);
 const folder = (path) => String(path || '').split('/').filter(Boolean).at(-1) || path || '';
 function header() {
-  const working = connected && (busyHere() || sending);
+  const working = connected && (busyHere() || sending || modelChanging());
   const dot = $('status-dot');
   dot.classList.toggle('ready', connected && !working);
   dot.classList.toggle('working', working);
@@ -202,11 +214,13 @@ function versions() {
 }
 function controls() {
   openNotificationWhenReady();
-  const switching = sessionStarting() || Boolean(spawnRequest) || switchPending;
+  modelPicker.sync();
+  const starting = sessionStarting() || Boolean(spawnRequest) || switchPending;
+  const switching = starting || modelChanging();
   $('new-session').disabled = !connected || switching || sending || listening || preparingImages;
   $('sessions-new').disabled = $('new-session').disabled;
-  $('new-session').classList.toggle('busy', switching);
-  setText('new-session-label', switching ? 'Starting…' : 'New');
+  $('new-session').classList.toggle('busy', starting);
+  setText('new-session-label', starting ? 'Starting…' : 'New');
   const hasDraft = Boolean($('draft').value.trim() || attachments.length);
   $('prompt-box').classList.toggle('has-draft', hasDraft);
   $('prompt-box').classList.toggle('listening', listening);
@@ -218,7 +232,7 @@ function controls() {
   $('reconnect').hidden = !offline || !canReconnect();
   $('restore-banner').hidden = (!connected && !notificationTarget) || !stopped.length;
   setText('restore-label', `${stopped.length} earlier session${stopped.length === 1 ? '' : 's'} stopped · Restore`);
-  $('send').disabled = switching || !sessionReady() || sending || listening || preparingImages || (!$('draft').value.trim() && !attachments.length);
+  $('send').disabled = switching || !sessionReady() || sending || listening || preparingImages || (attachments.length > 0 && state?.modelSupportsImages === false) || (!$('draft').value.trim() && !attachments.length);
   $('attach').disabled = switching || !sessionReady() || sending || listening || preparingImages;
   $('image-input').disabled = $('attach').disabled;
   for (const button of attachmentButtons) button.disabled = switching || sending || listening || preparingImages;
@@ -424,7 +438,7 @@ function setAttachments(next) {
     remove.textContent = '×';
     remove.setAttribute('aria-label', `Remove ${item.name}`);
     remove.addEventListener('click', () => {
-      if (sending || listening || preparingImages || sessionStarting()) return;
+      if (sending || listening || preparingImages || sessionStarting() || modelChanging()) return;
       setAttachments(attachments.filter((other) => other !== item));
       controls();
     });
@@ -467,7 +481,7 @@ async function prepareImage(file) {
   } finally { bitmap.close(); canvas.width = 0; canvas.height = 0; }
 }
 async function addImages(selection) {
-  if (!connected || sending || listening || preparingImages || sessionStarting()) return;
+  if (!connected || sending || listening || preparingImages || sessionStarting() || modelChanging()) return;
   const files = Array.from(selection || []);
   if (!files.length) return;
   const unsupported = imageSupportError();
@@ -594,7 +608,7 @@ function renderMessages(messages) {
   }));
 }
 async function startNewSession() {
-  if (!connected || sessionStarting() || spawnRequest || switchPending || sending || listening || preparingImages) return;
+  if (!connected || sessionStarting() || modelChanging() || spawnRequest || switchPending || sending || listening || preparingImages) return;
   if (!sessionsSupported) { notice('Restart Pi once to run sessions in parallel. Your conversation and draft are kept.', true); return; }
   // Always keep the current Pi: replacing an idle runtime made its conversation
   // disappear from Sessions, even though it was still saved on disk.
@@ -949,7 +963,7 @@ async function poll() {
 }
 async function send() {
   const text = $('draft').value.trim();
-  if ((!text && !attachments.length) || !sessionReady() || sending || listening || preparingImages || sessionStarting()) return;
+  if ((!text && !attachments.length) || !sessionReady() || sending || listening || preparingImages || sessionStarting() || modelChanging()) return;
   if (attachments.length && imageSupportError()) { notice(imageSupportError(), true); return; }
   if (text.length > 16000) { notice('Message is too long (maximum 16000 characters).', true); return; }
   // Reuse the ID on a manual retry: a lost HTTP response must not duplicate a prompt.
@@ -994,7 +1008,7 @@ async function startSpeech() {
     else cancelRecording();
     return;
   }
-  if (!connected || sending || preparingImages || sessionStarting()) return;
+  if (!connected || sending || preparingImages || sessionStarting() || modelChanging()) return;
   playback.stop(); // Never record Pi's own spoken answer into a new prompt.
   const base = $('draft').value;
   cancelSpeech = false;
@@ -1075,7 +1089,7 @@ async function startSpeech() {
   }
 }
 $('attach').addEventListener('click', () => {
-  if (!connected || sending || listening || preparingImages || sessionStarting()) return;
+  if (!connected || sending || listening || preparingImages || sessionStarting() || modelChanging()) return;
   const unsupported = imageSupportError();
   if (unsupported) notice(unsupported, true);
   else $('image-input').click();
@@ -1138,6 +1152,7 @@ for (const name of ['sessions', 'activity', 'history', 'settings']) {
     if (name === 'sessions') { renderSessions(); void pollSessions(); }
     if (name === 'activity') { renderActivity(); void pollActivity(); }
     dialog.showModal();
+    if (name === 'settings') void modelPicker.open();
   });
   $(`close-${name}`).addEventListener('click', () => dialog.close());
   dialog.addEventListener('click', (event) => { if (event.target === dialog) dialog.close(); });

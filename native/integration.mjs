@@ -11,6 +11,7 @@ import { setTimeout as delay } from 'node:timers/promises';
 import { createHost } from '../host/server.mjs';
 import { createLauncher } from '../host/launcher.mjs';
 import { discoverHost } from './connection.mjs';
+import { configureTestModels } from '../test/fixtures/test-models.mjs';
 
 const exec = promisify(execFile);
 const root = await mkdtemp(join(tmpdir(), 'pi-voice-pty-'));
@@ -20,7 +21,7 @@ const pi = process.env.PI_VOICE_TEST_PI || join(homedir(), '.pi/agent/bin/pi');
 const tmux = process.env.PI_VOICE_TEST_TMUX || (process.env.PREFIX ? join(process.env.PREFIX, 'bin/tmux') : 'tmux');
 const options = { socket, pi, tmux, env: { ...process.env, PI_CODING_AGENT_DIR: root, TERM: 'xterm-256color' },
   args: ['--offline', '--no-context-files', '--no-skills', '--no-prompt-templates', '--no-themes', '--no-tools', '--no-extensions',
-    '--provider', 'openai', '--model', 'gpt-4o', '-e', new URL('../extension.mjs', import.meta.url).pathname,
+    '--provider', 'pi-voice-test', '--model', 'vision', '-e', new URL('../extension.mjs', import.meta.url).pathname,
     '-e', new URL('../test/fixtures/hold-input.mjs', import.meta.url).pathname] };
 let host;
 let token;
@@ -39,6 +40,7 @@ async function until(check, label) {
   throw new Error(`Timed out: ${label}`);
 }
 try {
+  await configureTestModels(root);
   await exec(pi, ['--version']); await exec(tmux, ['-V']);
   await start();
   const first = await until(async () => (await request('sessions')).sessions.find((e) => e.status === 'ready'), 'first Pi');
@@ -47,6 +49,16 @@ try {
   const launched = await request('session/spawn', { id: operation }, first);
   assert.equal((await request('session/spawn', { id: operation }, first)).handle, launched.handle);
   const second = await until(async () => (await request('sessions')).sessions.find((e) => e.handle === launched.handle && e.status === 'ready'), 'second Pi');
+  const listed = await request('models', undefined, first);
+  assert.deepEqual(listed.current, { provider: 'pi-voice-test', id: 'vision' });
+  const firstBefore = await request('state', undefined, first);
+  await request('model', { sessionId: first.sessionId, provider: 'pi-voice-test', id: 'text', expectedModel: listed.current }, first);
+  const firstAfter = await request('state', undefined, first);
+  assert.deepEqual(firstAfter.modelSelection, { provider: 'pi-voice-test', id: 'text' });
+  assert.equal(firstAfter.modelSupportsImages, false);
+  assert.deepEqual(firstAfter.messages, firstBefore.messages);
+  assert.equal(firstAfter.sessionId, firstBefore.sessionId);
+  assert.deepEqual((await request('state', undefined, second)).modelSelection, { provider: 'pi-voice-test', id: 'vision' }, 'Another real Pi process must retain its own model');
   await request('session/select', { handle: second.handle });
   await request('prompt', { id: randomUUID(), sessionId: second.sessionId, text: 'pi-voice-integration-hold' }, second);
   const progress = () => readFile(join(root, 'work-progress'), 'utf8').then(Number).catch(() => 0);
@@ -71,7 +83,7 @@ try {
   assert.equal((await request('sessions')).sessions.length, 0, 'Empty remains empty on restart');
   const third = await request('session/spawn', { id: randomUUID() });
   await until(async () => (await request('sessions')).sessions.find((e) => e.handle === third.handle && e.status === 'ready'), 'new Pi from empty state');
-  console.log('PASS: real Pi/tmux first-session closure preserves another Pi’s running extension operation and the host origin; completion, host restart/adoption, last-session close, empty restart, and New from empty. No provider calls.');
+  console.log('PASS: real Pi/tmux host switches only the explicitly targeted process’s model and preserves history/capabilities; first-session closure preserves another Pi’s running extension operation and the host origin; completion, host restart/adoption, last-session close, empty restart, and New from empty. No provider calls.');
 } finally {
   await host?.close();
   await exec(tmux, ['-L', socket, 'kill-server']).catch(() => {});

@@ -124,7 +124,20 @@
         <p id="wake-status" class="hint" role="status">Checking stay-awake support…</p>
         <p class="hint">Prevents CPU sleep, not Android force-closing. Uses more battery. In Android, set Termux battery use to <strong>Unrestricted</strong> / allow background activity. The display may still sleep. Termux’s wake lock is shared across its sessions.</p>
       </section>
-      <section class="settings-section session" aria-label="Connected session"><h3>Connected Pi</h3><strong id="session">No session connected</strong><small id="directory"></small><small id="model"></small></section>
+      <section class="settings-section session" aria-label="Connected session">
+        <h3>Connected Pi</h3><strong id="session">No session connected</strong><small id="directory"></small><small id="model"></small>
+        <p id="model-support" class="hint">Connect a Pi session to choose its model.</p>
+        <div id="model-controls" class="model-controls" hidden>
+          <label class="field-label" for="model-filter">Find a model</label>
+          <input id="model-filter" type="text" placeholder="Filter by name, ID or provider" autocomplete="off" spellcheck="false" aria-controls="model-choice">
+          <label class="field-label" for="model-choice">Model for this session</label>
+          <select id="model-choice" aria-describedby="model-details model-status"></select>
+          <p id="model-details" class="hint model-details"></p>
+          <div class="model-actions"><button id="model-refresh" class="quiet">Refresh models</button><button id="model-apply">Use model</button></div>
+          <p id="model-status" class="hint" role="status" aria-live="polite"></p>
+          <p class="hint">Uses Pi’s configured providers. A model change keeps this conversation and does not change other sessions or Pi’s default. Local servers must already be running; no automatic cloud fallback.</p>
+        </div>
+      </section>
       <section class="settings-section" aria-label="Versions"><h3>About</h3><dl class="about"><div><dt>Pi Voice</dt><dd id="voice-version">—</dd></div><div><dt>Pi</dt><dd id="pi-version">—</dd></div></dl><p id="version-hint" class="hint" hidden></p></section>
       <section class="settings-section"><h3>Termux</h3><p class="hint">Pi runs in Termux in the background; this app starts it and resumes your conversation if it stopped. To see Pi’s terminal, open Activity and tap Open in Termux. In Pi, <code>/voice stop</code> disconnects the app and <code>/voice</code> reconnects it. Phone-only connection; no public server.</p></section>
     </div>

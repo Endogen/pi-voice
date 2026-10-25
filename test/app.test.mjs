@@ -51,7 +51,7 @@ async function setup({ auto = false, speech = true, awake = true, confirmed = tr
   class Utterance { constructor(text) { this.text = text; } }
   const synthesis = { cancellations: 0, speak: (utterance) => utterances.push(utterance), cancel() { this.cancellations++; } };
   const values = new Map([['pi-voice-autosend', String(auto)], ['pi-voice-awake', String(awake)]]);
-  const state = { handle: 'session-100', instanceId: 'instance-100', status: 'ready', capabilities: { close: true }, sessionId: 'session-one', sessionName: 'Test', cwd: '/project', model: 'test/test', busy: false, messages: [], imageAttachments: true, modelSupportsImages: true };
+  const state = { handle: 'session-100', instanceId: 'instance-100', status: 'ready', capabilities: { close: true }, sessionId: 'session-one', sessionName: 'Test', cwd: '/project', model: 'test/test', modelSelection: { provider: 'test', id: 'test' }, modelSwitchingSupported: true, modelSwitching: false, busy: false, messages: [], imageAttachments: true, modelSupportsImages: true };
   const imageProcessing = {
     calls: [], encoded: [], closed: 0,
     async decode(file) { return { width: file.width || 4000, height: file.height || 3000, close() { imageProcessing.closed++; } }; },
@@ -69,7 +69,17 @@ async function setup({ auto = false, speech = true, awake = true, confirmed = tr
   const confirmations = [];
   const stopped = [];
   const sessions = [{ handle: 'session-100', instanceId: 'instance-100', status: 'ready', capabilities: { close: true }, sessionId: 'session-one', title: 'Test', cwd: '/project', busy: false, spawned: false }];
+  const models = [
+    { provider: 'test', id: 'test', name: 'Cloud model', input: ['text', 'image'], contextWindow: 128000, reasoning: true },
+    { provider: 'custom-local', id: 'qwen/model:Q5_K_M', name: 'Local model', input: ['text'], contextWindow: 4096, reasoning: true },
+  ];
   const network = {
+    models: () => Response.json({ sessionId: state.sessionId, current: state.modelSelection, models, contextTokens: 8000 }),
+    model: (body) => {
+      state.modelSelection = { provider: body.provider, id: body.id }; state.model = `${body.provider}/${body.id}`;
+      state.modelSupportsImages = models.find((item) => item.provider === body.provider && item.id === body.id)?.input.includes('image');
+      return Response.json({ ok: true, model: state.modelSelection });
+    },
     state: initialState || (() => Response.json(state)),
     sessions: () => Response.json({ selected: state.handle, sessions, stopped }),
     activity: () => Response.json({ version: 1, steps: [], terminal: {} }),
@@ -123,6 +133,8 @@ async function setup({ auto = false, speech = true, awake = true, confirmed = tr
       if (path === '/api/state') return network.state(handle);
       if (path === '/api/sessions') return network.sessions();
       if (path === '/api/activity') return network.activity(handle);
+      if (path === '/api/models') return network.models(handle);
+      if (path === '/api/model') return network.model(body, handle);
       if (path === '/api/session/select') return Response.json({ ok: true });
       if (path === '/api/session/spawn') return network.spawn(body);
       if (path === '/api/session/close') return network.close(body, handle);
@@ -139,7 +151,7 @@ async function setup({ auto = false, speech = true, awake = true, confirmed = tr
   });
   vm.runInContext(source, context);
   await flush();
-  return { elements, prompts, instances, nativeCalls, feedback, state, sessions, stopped, tones, context, document, values, network, requests, confirmations, imageProcessing, utterances, synthesis, el: (id) => elements.get(id) };
+  return { elements, prompts, instances, nativeCalls, feedback, state, models, sessions, stopped, tones, context, document, values, network, requests, confirmations, imageProcessing, utterances, synthesis, el: (id) => elements.get(id) };
 }
 function result(text, final = true) {
   return { results: [Object.assign([{ transcript: text }], { isFinal: final })] };
@@ -1711,4 +1723,178 @@ test('native preference migration imports allowlisted settings without replacing
   assert.equal(h.el('sound').checked, false);
   assert.equal(h.values.get('pi-voice-token'), 'test-token');
   assert.equal(vm.runInContext('targetHandle', h.context), 'session-100');
+});
+
+async function openModels(h) {
+  h.el('open-settings').click(); await flush();
+}
+function chooseModel(h, model = h.models[1]) {
+  h.el('model-choice').value = JSON.stringify([model.provider, model.id]);
+  h.el('model-choice').listeners.change();
+}
+
+test('model picker uses the registry, filters generically, and preserves drafts/images across an explicit session-only switch', async () => {
+  const h = await setup();
+  h.el('draft').value = 'Keep this unsent question'; await attach(h);
+  await openModels(h);
+  assert.equal(h.el('model-controls').hidden, false);
+  assert.equal(h.el('model-choice').children.length, 2, 'Grouped by provider');
+  assert.equal(h.el('model-apply').disabled, true, 'Current model is not an action');
+  h.el('model-filter').value = 'Q5_K_M'; h.el('model-filter').listeners.input();
+  chooseModel(h);
+  assert.equal(h.el('model-apply').disabled, false);
+  h.el('model-apply').click(); await flush(); await flush();
+  const request = h.requests.find((entry) => entry.path === '/api/model');
+  assert.equal(request.handle, 'session-100');
+  assert.deepEqual(request.body, { sessionId: 'session-one', provider: 'custom-local', id: 'qwen/model:Q5_K_M', expectedModel: { provider: 'test', id: 'test' } });
+  assert.match(h.confirmations.at(-1), /existing conversation.*custom-local/);
+  assert.match(h.confirmations.at(-1), /4,096 token context/);
+  assert.match(h.confirmations.at(-1), /unsent images will be kept/);
+  assert.equal(h.el('draft').value, 'Keep this unsent question');
+  assert.equal(h.el('attachments').children.length, 1);
+  assert.equal(h.prompts.length, 0);
+  assert.equal(h.el('model').textContent, 'custom-local/qwen/model:Q5_K_M');
+  assert.equal(h.el('send').disabled, true, 'Do not drop images for a text-only model');
+  assert.match(h.el('model-status').textContent, /Using custom-local/);
+});
+
+test('model picker confirmation cancellation, busy/queued tasks, recording and image preparation never POST', async () => {
+  const cancelled = await setup({ confirmed: false }); await openModels(cancelled); chooseModel(cancelled);
+  cancelled.el('model-apply').click(); await flush();
+  assert.equal(cancelled.requests.some((entry) => entry.path === '/api/model'), false);
+  for (const flag of ['busy', 'pending', 'recording', 'preparing', 'switching']) {
+    const h = await setup(); await openModels(h); chooseModel(h);
+    if (flag === 'busy') h.state.busy = true;
+    if (flag === 'pending') h.state.pending = true;
+    if (flag === 'switching') h.state.modelSwitching = true;
+    if (flag === 'recording') h.el('microphone').click();
+    if (flag === 'preparing') vm.runInContext('preparingImages = true', h.context);
+    await vm.runInContext('poll()', h.context);
+    assert.equal(h.el('model-apply').disabled, true, flag);
+    h.el('model-apply').click(); await flush();
+    assert.equal(h.requests.some((entry) => entry.path === '/api/model'), false, flag);
+  }
+});
+
+test('model changes are single-flight and block composer side effects until Pi confirms', async () => {
+  const h = await setup(); h.el('draft').value = 'Do not submit'; await openModels(h); chooseModel(h);
+  let finish;
+  h.network.model = (body) => new Promise((resolve) => { finish = () => {
+    h.state.modelSelection = { provider: body.provider, id: body.id }; h.state.model = `${body.provider}/${body.id}`;
+    resolve(Response.json({ ok: true }));
+  }; });
+  h.el('model-apply').click(); h.el('model-apply').click(); await flush();
+  assert.equal(h.requests.filter((entry) => entry.path === '/api/model').length, 1);
+  for (const id of ['send', 'attach', 'microphone', 'new-session']) assert.equal(h.el(id).disabled, true, id);
+  h.el('send').click(); h.el('microphone').click(); await vm.runInContext('startNewSession()', h.context);
+  assert.equal(h.prompts.length, 0); assert.equal(h.instances.length, 0);
+  assert.equal(h.requests.some((entry) => entry.path === '/api/session/spawn'), false);
+  finish(); await flush(); await flush();
+  assert.equal(h.el('draft').value, 'Do not submit');
+  assert.equal(h.el('send').disabled, false);
+});
+
+test('a lost model acknowledgement reconciles authoritative state and never automatically retries POST', async () => {
+  const h = await setup(); await openModels(h); chooseModel(h);
+  h.network.model = async (body) => {
+    h.state.modelSelection = { provider: body.provider, id: body.id }; h.state.model = `${body.provider}/${body.id}`;
+    throw new Error('Timed out');
+  };
+  h.el('model-apply').click(); await flush(); await flush();
+  assert.equal(h.requests.filter((entry) => entry.path === '/api/model').length, 1);
+  assert.equal(h.el('model').textContent, 'custom-local/qwen/model:Q5_K_M');
+  assert.match(h.el('model-status').textContent, /Pi confirms/);
+  assert.equal(h.el('model-status').classes.has('error'), false);
+});
+
+test('a successful model acknowledgement keeps controls locked until a later poll confirms the active model', async () => {
+  const h = await setup(); h.el('draft').value = 'Wait for confirmed state'; await openModels(h); chooseModel(h);
+  h.network.model = () => Response.json({ ok: true }); // Simulate an already-running state poll returning an old snapshot.
+  h.el('model-apply').click(); await flush(); await flush();
+  assert.match(h.el('model-status').textContent, /Change accepted/);
+  assert.equal(h.el('send').disabled, true);
+  assert.equal(h.el('model-apply').disabled, true);
+  h.state.modelSelection = { provider: h.models[1].provider, id: h.models[1].id };
+  h.state.model = `${h.models[1].provider}/${h.models[1].id}`;
+  await vm.runInContext('poll()', h.context);
+  assert.match(h.el('model-status').textContent, /Using custom-local/);
+  assert.equal(h.el('send').disabled, false);
+  assert.equal(h.el('draft').value, 'Wait for confirmed state');
+  assert.equal(h.requests.filter((entry) => entry.path === '/api/model').length, 1);
+});
+
+test('state polls settle authentication that outlives a timed-out model request, without replaying it', async () => {
+  for (const succeeds of [true, false]) {
+    const h = await setup(); h.el('draft').value = 'Keep this draft'; await openModels(h); chooseModel(h);
+    h.network.model = async () => { h.state.modelSwitching = true; throw new Error('Timed out'); };
+    h.el('model-apply').click(); await flush(); await flush();
+    assert.equal(h.el('model-status').classes.has('error'), false, 'A pending change is not a rejection');
+    assert.equal(h.el('send').disabled, true);
+    h.state.modelSwitching = false;
+    if (succeeds) {
+      h.state.modelSelection = { provider: h.models[1].provider, id: h.models[1].id };
+      h.state.model = `${h.models[1].provider}/${h.models[1].id}`;
+    }
+    await vm.runInContext('poll()', h.context);
+    assert.match(h.el('model-status').textContent, succeeds ? /Pi confirms/ : /no longer changing models/);
+    assert.equal(h.el('model-status').classes.has('error'), !succeeds);
+    assert.equal(h.requests.filter((entry) => entry.path === '/api/model').length, 1);
+    assert.equal(h.el('send').disabled, false);
+  }
+});
+
+test('provider rejection keeps the old model, releases controls and never silently falls back', async () => {
+  const h = await setup(); h.el('draft').value = 'Keep me'; await openModels(h); chooseModel(h);
+  h.network.model = () => Response.json({ error: 'Provider authentication unavailable' }, { status: 422 });
+  h.el('model-apply').click(); await flush(); await flush();
+  assert.equal(h.el('model').textContent, 'test/test');
+  assert.equal(h.el('draft').value, 'Keep me');
+  assert.match(h.el('model-status').textContent, /authentication unavailable/);
+  assert.equal(h.el('model-status').classes.has('error'), true);
+  assert.equal(h.el('send').disabled, false);
+  assert.equal(h.requests.filter((entry) => entry.path === '/api/model').length, 1);
+});
+
+test('old backends, empty registries and vanished current models have actionable, non-destructive UI', async () => {
+  const h = await setup(); delete h.state.modelSwitchingSupported;
+  await vm.runInContext('poll()', h.context); await openModels(h);
+  assert.equal(h.el('model-controls').hidden, true); assert.match(h.el('model-support').textContent, /Restart/);
+  h.state.modelSwitchingSupported = true;
+  h.network.models = () => Response.json({ error: 'Not installed' }, { status: 404 });
+  await vm.runInContext('poll()', h.context); await flush();
+  assert.match(h.el('model-status').textContent, /restart its host and this Pi/);
+  h.network.models = () => Response.json({ sessionId: h.state.sessionId, current: h.state.modelSelection, models: [] });
+  h.el('model-refresh').click(); await flush();
+  assert.equal(h.el('model-apply').disabled, true); assert.equal(h.el('model-choice').disabled, true);
+  assert.match(h.el('model-choice').children[0].textContent, /current, unavailable/);
+  assert.match(h.el('model-status').textContent, /Configure a provider/);
+});
+
+test('external Pi model selections update the picker without replacing the conversation or choosing for the user', async () => {
+  const h = await setup(); await openModels(h); chooseModel(h);
+  h.state.modelSelection = { provider: 'third-party', id: 'picked-in-termux' }; h.state.model = 'third-party/picked-in-termux';
+  await vm.runInContext('poll()', h.context);
+  assert.equal(h.el('model-choice').value, JSON.stringify(['third-party', 'picked-in-termux']));
+  assert.equal(h.el('model-apply').disabled, true);
+  assert.equal(h.requests.some((entry) => entry.path === '/api/model'), false);
+});
+
+test('stale model lists and completed POSTs cannot overwrite or notify a newly selected session', async () => {
+  for (const type of ['list', 'post']) {
+    const h = await setup(); let finish;
+    if (type === 'list') h.network.models = () => new Promise((resolve) => { finish = () => resolve(Response.json({ sessionId: 'session-one', current: { provider: 'test', id: 'test' }, models: h.models })); });
+    await openModels(h);
+    if (type === 'post') {
+      chooseModel(h); h.network.model = () => new Promise((resolve) => { finish = () => resolve(Response.json({ ok: true })); });
+      h.el('model-apply').click(); await flush();
+    }
+    const oldFinish = finish;
+    h.network.models = () => Response.json({ sessionId: 'session-two', current: { provider: 'elsewhere', id: 'other' }, models: [{ provider: 'elsewhere', id: 'other', name: 'Other', input: ['text'] }] });
+    Object.assign(h.state, { handle: 'session-200', instanceId: 'instance-200', sessionId: 'session-two', model: 'elsewhere/other', modelSelection: { provider: 'elsewhere', id: 'other' } });
+    vm.runInContext("selectTarget('session-200')", h.context); await vm.runInContext('poll()', h.context); await flush();
+    oldFinish(); await flush(); await flush();
+    assert.equal(h.el('model').textContent, 'elsewhere/other', type);
+    assert.equal(h.el('model-choice').value, JSON.stringify(['elsewhere', 'other']), type);
+    assert.doesNotMatch(h.el('model-status').textContent, /Using custom-local|Change accepted|not confirmed/, type);
+  }
 });

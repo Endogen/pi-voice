@@ -31,7 +31,7 @@ export function termuxSpeech({ signal, timeout = 45000 } = {}) {
 }
 
 /** Adapter for exactly one Pi process. No discovery, launch, or peer relay. */
-export async function createVoiceBridge({ token, getState, getActivity, onPrompt, onAbort, onAwake, onNewSession, onClose,
+export async function createVoiceBridge({ token, getState, getActivity, getModels, onModel, onPrompt, onAbort, onAwake, onNewSession, onClose,
   pid = process.pid, instanceId, retries = [], speech = termuxSpeech, port = 8765 }) {
   let listener;
   const submissions = new Map(retries.slice(-200).filter((entry) => Array.isArray(entry) && typeof entry[0] === 'string' && entry[0].length <= 200
@@ -51,8 +51,22 @@ export async function createVoiceBridge({ token, getState, getActivity, onPrompt
       } else if (req.method === 'GET' && path === '/api/activity') {
         if (!getActivity) throw fail(501, 'Live activity is not installed. Restart Pi after updating.');
         send(200, getActivity());
+      } else if (req.method === 'GET' && path === '/api/models') {
+        if (!getModels) throw fail(501, 'Model switching is not installed. Restart Pi after updating.');
+        send(200, getModels());
+      } else if (req.method === 'POST' && path === '/api/model') {
+        const body = await readJSON(req);
+        if (!body || typeof body !== 'object' || Array.isArray(body) || typeof body.sessionId !== 'string') throw fail(400, 'A model selection and current session ID are required.');
+        const state = getState();
+        if (body.sessionId !== state.sessionId) throw fail(409, 'The Pi session changed. Refresh models before trying again.');
+        if (!onModel) throw fail(501, 'Model switching is not installed. Restart Pi after updating.');
+        if (state.busy || state.pending || state.modelSwitching || state.newSessionAction?.status === 'starting' || listener) {
+          throw fail(409, 'Finish or stop the current task/recording before changing models.');
+        }
+        send(200, await onModel(body));
       } else if (req.method === 'POST' && path === '/api/session/close') {
         const body = await readJSON(req);
+        if (getState().modelSwitching) throw fail(409, 'Wait for the model change before closing this session.');
         if (!body || typeof body.sessionId !== 'string' || body.sessionId !== getState().sessionId) throw fail(409, 'The Pi session changed. Review it before closing.');
         if (!onClose) throw fail(501, 'Closing sessions is not installed. Restart Pi after updating.');
         send(202, onClose());
@@ -84,6 +98,7 @@ export async function createVoiceBridge({ token, getState, getActivity, onPrompt
         if (images.length && (!state.imageAttachments || !state.modelSupportsImages)) {
           throw fail(422, 'The connected Pi model does not support images. Select a vision-capable model first.');
         }
+        if (state.modelSwitching) throw fail(409, 'A model change is in progress. Wait before sending.');
         if (state.newSessionAction?.status === 'starting') throw fail(409, 'A new session is starting. Wait before sending.');
         // onPrompt must enqueue synchronously, so duplicate requests cannot race.
         const result = onPrompt(body.text.trim(), images);
@@ -98,7 +113,7 @@ export async function createVoiceBridge({ token, getState, getActivity, onPrompt
         const state = getState();
         if (body.sessionId !== state.sessionId) throw fail(409, 'The Pi session changed. Review it before starting another.');
         if (!onNewSession) throw fail(501, 'New-session support is not installed. Restart Pi after updating.');
-        if (state.busy || state.pending || listener) throw fail(409, 'Finish or stop the current task/recording before starting a new session.');
+        if (state.busy || state.pending || state.modelSwitching || listener) throw fail(409, 'Finish or stop the current task/recording before starting a new session.');
         // The callback accepts synchronously, then defers session replacement so
         // this acknowledgement is sent before Pi shuts down the old bridge.
         send(202, onNewSession(body.id, body.sessionId));
@@ -118,6 +133,7 @@ export async function createVoiceBridge({ token, getState, getActivity, onPrompt
         listener?.abort();
         send(200, { ok: true });
       } else if (req.method === 'POST' && path === '/api/listen') {
+        if (getState().modelSwitching) throw fail(409, 'A model change is in progress. Wait before recording.');
         if (getState().newSessionAction?.status === 'starting') throw fail(409, 'A new session is starting. Wait before recording.');
         if (listener) throw fail(409, 'Android speech is already listening.');
         const controller = new AbortController();

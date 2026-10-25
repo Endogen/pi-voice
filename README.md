@@ -25,6 +25,7 @@ Pi Voice gives that agent a real app: **tap the icon → speak → review the tr
 - **Live activity:** see the tool Pi is running, its output and the reply being written, and jump to Pi's terminal in Termux.
 - **Parallel sessions:** start a new conversation while Pi is still working, and switch between running sessions.
 - **Picks up where you left off:** if the phone or Android stops Pi, the host can reopen saved conversations; surviving Pi processes are reattached without being restarted.
+- **Models:** choose a configured local or cloud model for the current session, without changing other sessions or Pi's default.
 - **Images:** attach up to four screenshots or photos for vision-capable models.
 - **Read aloud:** listen to a finished reply on request.
 - **Know when Pi is done:** a chime and a light vibration when a reply arrives, and a notification when the app is in the background.
@@ -106,6 +107,18 @@ Up to 4 sessions can run at once. Each is a full Pi process with its own memory 
 
 Closing one session leaves the host and other sessions running. Closing the last shows a connected empty screen with **New session**. **Sessions → Stop Pi Voice service** stops the empty host; Reconnect starts it again. Intentional closures are not reopened automatically. Closing a busy session stops its task and shows Closing until its process exits; a timeout is reported instead of pretending it closed.
 
+### Changing models
+
+Open **Settings → Connected Pi**, filter by model name, ID or provider, choose a model, then tap **Use model** and confirm. The list comes from that Pi process's configured, authenticated model registry, including compatible local providers. **Refresh models** reads that registry again; it does not configure providers or necessarily reload Pi's configuration files.
+
+- The change affects **only this Pi session**. Its conversation, your unsent draft and images, other Pi processes, and Pi's default model are kept. A selection made in Pi's terminal is reflected in the app too.
+- Finish or stop the current task and finish recording/preparing images first. Sending, recording and starting a session are disabled while the app waits for a model change. Stale process, conversation and previous-model selections are rejected rather than applied to another target.
+- Changing providers can send the **existing conversation**, including earlier images and tool results, to the new provider on your next message. The confirmation warns about this, a smaller context window, and unsent images when the new model is text-only. Images are never silently removed; remove them or switch back to an image-capable model before sending.
+- A listed model is configured, **not necessarily reachable**. Pi remains responsible for authentication, tool calls and provider compatibility. Local servers must already be running. Pi Voice does not download/load models, start inference servers or fall back to a cloud provider.
+- A timeout is not proof of failure. The app reads Pi's active selection back and never automatically retries a model change. Check the displayed current model before trying again.
+
+If the controls ask for an update, restart the host and the relevant Pi workers after their tasks finish (see [Updating](#updating)). This feature does not require a new APK when using the current 3.x app shell. Configure any new provider in Pi first; a model file on disk alone does not make it selectable.
+
 ### Watching what Pi is doing
 
 Tap the working line, or the terminal button beside the reply, to open **Activity**:
@@ -155,7 +168,7 @@ Notifications come from the Pi extension in Termux, which tells the app when a r
 - **Voice output:** the read-aloud language, for example `en-US` or `de-DE`. Install matching voices in Android's text-to-speech settings.
 - **Replies & feedback:** reply notifications, the reply chime and haptic feedback.
 - **Keep Pi available:** the Termux wake lock (see below).
-- **Connected Pi:** the session, folder and model.
+- **Connected Pi:** the session, folder, active model and session-scoped model picker.
 - **About:** the Pi Voice and Pi versions of the connected session, with a note if it still runs an older Pi Voice backend.
 
 ## Keeping Pi running
@@ -231,6 +244,8 @@ To rotate the token, quit all Pi instances and stop the Pi Voice service, then d
 | `extension.mjs` | Per-process Pi adapter: prompts, activity, wake lock, notifications, and `/voice`. |
 | `host/` | Independent app server, session manager, durable registry, worker client, and tmux launcher. |
 | `bridge.mjs` | One worker's Pi API and Termux:API speech fallback. |
+| `models.mjs` | Session-scoped Pi model-registry adapter, safe public metadata, validation and single-flight selection. |
+| `src/model-picker.js` | Provider-independent model-picker UI; no provider requests or runtime management. |
 | `transport.mjs`, `config.mjs`, `storage.mjs` | Shared HTTP boundary, authentication/configuration, and atomic persistence. |
 | `discovery.mjs` | Finds running bridges from private endpoint records. |
 | `running.mjs` | Records which conversations are open, for restoring them after Pi stops. |
@@ -256,4 +271,4 @@ npm run build:native       # Build and sign the APK (Termux; see native/README.m
 
 The terminal integration also accepts `PI_VOICE_TEST_PI` and `PI_VOICE_TEST_TMUX` for isolated desktop testing. For a Pi installed elsewhere: `PI_VOICE_TEST_PI=/path/to/pi PI_VOICE_TEST_EXTENSION="$PWD/extension.mjs" npm run test:integration`.
 
-Automated tests cover the interface logic, HTTP behavior, real Pi integration and the native app's Java security checks. Anything that needs a real phone has to be checked there: speech recognition, text-to-speech, the image picker, Termux tab creation, and how long a given vendor lets Pi run in the background.
+Automated tests cover the interface logic, HTTP behavior, real Pi integration and the native app's Java security checks. Model-switch regressions include secret-free registry metadata, stale targets, concurrent controls, rejected/lost acknowledgements, preserved drafts/images/history and process isolation. Both real-Pi integrations use an isolated unreachable test provider and consume prompts before inference; they validate selection and capabilities, not real-provider availability or model quality. Anything that needs a real phone has to be checked there: speech recognition, text-to-speech, the image picker, Termux tab creation, and how long a given vendor lets Pi run in the background.

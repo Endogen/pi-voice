@@ -10,6 +10,7 @@ import { sendReplyAlert } from './notify.mjs';
 import { writeRecord } from './running.mjs';
 import { stateDir, loadToken, protocolVersion, validId } from './config.mjs';
 import { atomicJSON } from './storage.mjs';
+import { createModelSelection, modelReference } from './models.mjs';
 export { stateDir } from './config.mjs';
 
 const readVersion = async (file) => {
@@ -86,6 +87,7 @@ export default function installVoiceExtension(pi, { wakeLock = createWakeLock({ 
   let context;
   let starting;
   let newSessionAction;
+  const models = createModelSelection({ pi, getContext: () => context, blocked: () => closing || newSessionAction?.status === 'starting' });
   const endpointFile = join(stateDir, 'endpoints', `${process.pid}.json`);
   // Runtime replacement carries transport identity and accepted request hashes,
   // never a stale Pi context, across /new, /resume and /reload.
@@ -106,6 +108,9 @@ export default function installVoiceExtension(pi, { wakeLock = createWakeLock({ 
       sessionPersistent: Boolean(context.sessionManager.getSessionFile()),
       cwd: context.cwd,
       model: context.model ? `${context.model.provider}/${context.model.id}` : 'No model selected',
+      modelSelection: modelReference(context.model),
+      modelSwitchingSupported: models.supported(),
+      modelSwitching: models.switching,
       imageAttachments: imageLimits,
       modelSupportsImages: Boolean(context.model?.input?.includes('image')),
       busy: !context.isIdle(),
@@ -155,6 +160,8 @@ export default function installVoiceExtension(pi, { wakeLock = createWakeLock({ 
         token, port, instanceId, retries,
         getState: snapshot,
         getActivity: () => ({ ...activity.snapshot(), terminal: getTerminal() }),
+        getModels: () => models.list(),
+        onModel: (selection) => models.select(selection),
         onClose() {
           // Only app-started sessions: never quit a Pi the user runs in a terminal.
           if (!managedId) throw fail(409, 'Only sessions started from the app can be closed here. Quit this one in Termux.');

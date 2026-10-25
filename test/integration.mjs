@@ -6,14 +6,16 @@ import { mkdtemp, readdir, readFile, rm } from 'node:fs/promises';
 import { homedir, tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { configureTestModels } from './fixtures/test-models.mjs';
 
 const directory = await mkdtemp(join(tmpdir(), 'pi-voice-integration-'));
+await configureTestModels(directory);
 const executable = process.env.PI_VOICE_TEST_PI || join(homedir(), '.pi/agent/bin/pi');
 const extension = process.env.PI_VOICE_TEST_EXTENSION || join(homedir(), '.pi/agent/extensions/pi-voice.ts');
 const child = spawn(executable, [
   '--mode', 'rpc', '--no-session', '--offline', '--no-context-files', '--no-skills',
   '--no-prompt-templates', '--no-themes', '--no-tools', '--no-extensions',
-  '--provider', 'openai', '--model', 'gpt-4o',
+  '--provider', 'pi-voice-test', '--model', 'vision',
   '-e', extension,
   '-e', fileURLToPath(new URL('./fixtures/capture-input.mjs', import.meta.url)),
 ], { env: { ...process.env, PI_CODING_AGENT_DIR: directory, PI_VOICE_RPC: '1' }, stdio: ['pipe', 'pipe', 'pipe'] });
@@ -84,6 +86,37 @@ try {
     body: JSON.stringify({ sessionId: state.sessionId }),
   });
   assert.equal(abort.status, 200);
+  const headers = { Authorization: `Bearer ${endpoint.token}`, 'Content-Type': 'application/json' };
+  const modelsResponse = await fetch(`${endpoint.origin}/api/models`, { headers });
+  assert.equal(modelsResponse.status, 200);
+  const listed = await modelsResponse.json();
+  assert.equal(listed.sessionId, state.sessionId);
+  assert.deepEqual(listed.current, { provider: 'pi-voice-test', id: 'vision' });
+  assert.ok(listed.models.some((model) => model.provider === 'pi-voice-test' && model.id === 'text'));
+  assert.equal(state.modelSwitchingSupported, true);
+  const settingsBefore = await readFile(join(directory, 'settings.json'), 'utf8').catch(() => null);
+  const configBefore = await readFile(join(directory, 'models.json'), 'utf8');
+  let expectedModel = listed.current;
+  for (const id of ['text', 'vision']) {
+    const result = await fetch(`${endpoint.origin}/api/model`, { method: 'POST', headers,
+      body: JSON.stringify({ sessionId: state.sessionId, provider: 'pi-voice-test', id, expectedModel }) });
+    assert.equal(result.status, 200, await result.text());
+    const confirmed = await command('get_state');
+    assert.equal(confirmed.data.model.provider, 'pi-voice-test');
+    assert.equal(confirmed.data.model.id, id);
+    assert.equal(confirmed.data.sessionId, state.sessionId);
+    const worker = await (await fetch(`${endpoint.origin}/api/state`, { headers })).json();
+    assert.deepEqual(worker.modelSelection, { provider: 'pi-voice-test', id });
+    assert.equal(worker.modelSupportsImages, id === 'vision');
+    assert.equal(worker.modelSwitching, false);
+    assert.deepEqual(worker.messages, state.messages);
+    expectedModel = worker.modelSelection;
+  }
+  assert.equal(await readFile(join(directory, 'settings.json'), 'utf8').catch(() => null), settingsBefore, 'Session-only model switches must not change Pi defaults');
+  assert.equal(await readFile(join(directory, 'models.json'), 'utf8'), configBefore);
+  const staleModel = await fetch(`${endpoint.origin}/api/model`, { method: 'POST', headers,
+    body: JSON.stringify({ sessionId: state.sessionId, provider: 'pi-voice-test', id: 'text', expectedModel: { provider: 'pi-voice-test', id: 'text' } }) });
+  assert.equal(staleModel.status, 409, 'A stale previous-model snapshot must not override a later selection');
   // Exercise real RPC session replacement and extension recreation. App New
   // now spawns a separate TUI, covered by native/integration.mjs. Internal slash
   // commands sent by an extension are not dispatched in Pi's RPC mode.
@@ -159,7 +192,7 @@ try {
   assert.equal(exit.code, 0, stderr);
   assert.deepEqual(await readdir(endpoints), []);
   await assert.rejects(fetch(`${endpoint.origin}/api/state`));
-  console.log('PASS: real Pi authenticates its worker API, survives two RPC session replacements, preserves its port/token, rejects stale actions, receives native text+image and image-only inputs once despite retries, aborts and shuts down cleanly. No model/API calls or Android wake-lock changes made.');
+  console.log('PASS: real Pi authenticates its worker API, switches configured models without changing defaults/history, updates image capabilities, rejects stale selections, survives two RPC session replacements, preserves its port/token, receives native text+image and image-only inputs once despite retries, aborts and shuts down cleanly. No provider/inference requests or Android wake-lock changes made.');
 } finally {
   if (child.exitCode === null) child.kill('SIGTERM');
   await exited.catch(() => {});

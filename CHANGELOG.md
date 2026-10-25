@@ -1,5 +1,14 @@
 # Changelog
 
+## Unreleased
+
+- **Session-scoped model switching** under Settings → Connected Pi: filter configured models by name, provider or ID, review capabilities, and explicitly confirm a selection. Works with Pi's registry for local and cloud providers; no Qwen-specific paths, inference clients, runtime management or new dependencies.
+- Switches keep the conversation, unsent draft and images, other Pi processes and Pi's default unchanged. Confirmations warn about provider changes, smaller context windows and text-only models; images are not silently dropped and there is no automatic cloud fallback.
+- Explicit process/conversation/previous-model checks and a single-flight adapter reject stale or overlapping changes. The composer and related controls wait for confirmation; timeouts reconcile Pi's actual selection without replaying the request. Old backends show restart guidance.
+- Regression tests cover UI races, rejected/lost acknowledgements, HTTP authentication, secret-free metadata, queued tasks/recording and independent worker processes. Real Pi RPC and production-host/tmux tests verify model selection, capability updates, unchanged defaults/history and process isolation without inference requests.
+
+Reopen the app for the interface and restart its host and affected Pi workers after their tasks finish (see [Updating](README.md#updating)). No APK update is needed for this feature on the current 3.x app shell. Configure providers and run local inference servers separately in Pi; downloaded files alone do not appear in the picker.
+
 ## 3.0.0 — Pi Voice app 3.0.0 (versionCode 8)
 
 - Restored the original opaque icon for the Android app/launcher only. Loading screens (including the Android 12+ system splash), web favicons and all other logo uses retain the new transparent artwork. APK update required.

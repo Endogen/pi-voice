@@ -28,6 +28,14 @@ Critique of 1.7: double top inset in the native WebView (the shell already pads 
 
 **Sessions:** an independent Termux host serves the UI and manages every app-created Pi equally. Workers expose only their own conversation operations. Stable handles identify sessions; process-instance and conversation checks protect commands. The app retains one origin when the first or last session closes, and shows a connected empty state with New/Restore. External Pi processes remain selectable without granting the app shutdown ownership.
 
+## Model selection
+
+Model switching belongs to the connected Pi session, not the global app configuration. Keep it under **Settings → Connected Pi** rather than adding another top-bar control. A native select, provider groups, text filter, capability summary and explicit confirmation stay usable on mobile with accessible labels, a live status and 44px controls.
+
+`src/model-picker.js` owns only picker state and presentation. The existing authenticated host forwards explicit session/instance-targeted requests; `models.mjs` validates provider/ID pairs against that worker's canonical Pi registry and calls Pi's session-scoped `setModel`. Endpoint URLs, credentials, headers and provider implementations never become picker metadata. Pi remains responsible for authentication, history conversion, tools and reasoning compatibility; no new provider or runtime plugin framework is needed.
+
+Do not silently change providers, drop draft images, replace the conversation, persist a new global default or retry an uncertain mutation. Invalidate late results when the process/conversation target changes. Block conflicting app controls during a selection and confirm authoritative Pi state after a response or timeout. Clearly separate configured availability from a healthy running inference endpoint. Downloading models and managing local server lifecycles are separate future features, not model-picker responsibilities.
+
 ## Quality constraints
 
 - Safe-area insets, dynamic viewport units, mobile keyboard resize, minimum 44px touch controls.

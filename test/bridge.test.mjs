@@ -88,10 +88,10 @@ test('the WebView can open the public app page even when the load is marked cros
 
 test('external navigation exception cannot bypass API protection or the Host check', async (t) => {
   const { bridge, prompts, aborted } = await setup(t);
-  for (const path of ['state', 'prompt', 'listen', 'listen/cancel', 'abort', 'awake', 'session/new']) {
+  for (const path of ['state', 'models', 'model', 'prompt', 'listen', 'listen/cancel', 'abort', 'awake', 'session/new']) {
     const response = await browserRequest(bridge.origin, `/api/${path}`, {
       ...externalNavigation, Authorization: `Bearer ${token}`,
-    }, path === 'state' ? 'GET' : 'POST');
+    }, ['state', 'models'].includes(path) ? 'GET' : 'POST');
     assert.equal(response.status, 403, path);
   }
   assert.deepEqual(prompts, []);
@@ -102,8 +102,8 @@ test('external navigation exception cannot bypass API protection or the Host che
 
 test('requires authentication for state, prompts, microphone, abort and stay-awake', async (t) => {
   const { bridge } = await setup(t);
-  for (const path of ['state', 'prompt', 'listen', 'listen/cancel', 'abort', 'awake', 'session/new']) {
-    const response = await fetch(`${bridge.origin}/api/${path}`, { method: path === 'state' ? 'GET' : 'POST' });
+  for (const path of ['state', 'models', 'model', 'prompt', 'listen', 'listen/cancel', 'abort', 'awake', 'session/new']) {
+    const response = await fetch(`${bridge.origin}/api/${path}`, { method: ['state', 'models'].includes(path) ? 'GET' : 'POST' });
     assert.equal(response.status, 401, path);
   }
 });
@@ -372,4 +372,45 @@ test('worker rejects another process or instance and has no peer relay or lifecy
   for (const path of ['sessions', 'session/spawn', 'session/restore', 'session/forget']) {
     assert.equal((await request(`/api/${path}`, path === 'sessions' ? undefined : { id: 'operation-1' })).status, 404);
   }
+});
+
+test('model routes are explicit, session-scoped and reject unsupported workers or malformed requests', async (t) => {
+  const missing = await setup(t);
+  assert.equal((await missing.request('/api/models')).status, 501);
+  assert.equal((await missing.request('/api/model', { sessionId: 'session-1' })).status, 501);
+  const calls = [];
+  const list = { sessionId: 'session-1', current: { provider: 'a', id: 'one' }, models: [] };
+  const h = await setup(t, { getModels: () => list, onModel: (body) => { calls.push(body); return { ok: true }; } });
+  assert.deepEqual(await (await h.request('/api/models')).json(), list);
+  for (const body of [null, [], {}, { sessionId: 5 }]) assert.equal((await h.request('/api/model', body)).status, 400);
+  assert.equal((await h.request('/api/model', { sessionId: 'stale' })).status, 409);
+  assert.equal(calls.length, 0);
+  const body = { sessionId: 'session-1', provider: 'a', id: 'two', expectedModel: { provider: 'a', id: 'one' } };
+  assert.equal((await h.request('/api/model', body)).status, 200);
+  assert.deepEqual(calls, [body]);
+  assert.equal((await h.request('/api/model', body, { Origin: 'https://evil.example' })).status, 403);
+});
+
+test('worker serializes model changes against prompts, new-session, close and speech controls', async (t) => {
+  for (const flag of ['busy', 'pending', 'modelSwitching', 'starting']) {
+    let calls = 0;
+    const state = { sessionId: 'session-1', messages: [], busy: flag === 'busy', pending: flag === 'pending', modelSwitching: flag === 'modelSwitching', newSessionAction: flag === 'starting' ? { status: 'starting' } : undefined };
+    const h = await setup(t, { getState: () => state, onModel: () => { calls++; }, onNewSession: () => { throw new Error('Must not run'); }, onClose: () => { throw new Error('Must not run'); } });
+    assert.equal((await h.request('/api/model', { sessionId: 'session-1' })).status, 409, flag);
+    assert.equal(calls, 0);
+    if (flag !== 'modelSwitching') continue;
+    for (const [path, body] of [['prompt', prompt()], ['session/new', { sessionId: 'session-1', id: 'operation-1' }], ['session/close', { sessionId: 'session-1' }], ['listen', {}]]) {
+      assert.equal((await h.request(`/api/${path}`, body)).status, 409, path);
+    }
+    assert.equal(h.prompts.length, 0);
+  }
+});
+
+test('an active Termux recognizer excludes model changes from another client', async (t) => {
+  let finish;
+  const h = await setup(t, { onModel: () => { throw new Error('Must not run'); }, speech: () => new Promise((resolve) => { finish = resolve; }) });
+  const listening = h.request('/api/listen', {});
+  while (!finish) await new Promise((resolve) => setImmediate(resolve));
+  assert.equal((await h.request('/api/model', { sessionId: 'session-1' })).status, 409);
+  finish('draft only'); await listening;
 });
