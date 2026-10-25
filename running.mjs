@@ -34,12 +34,18 @@ async function usable(record) {
 /** Records whose Pi process is gone, newest first. Unusable ones are deleted. */
 export async function stoppedRecords(directory, { isAlive = alive } = {}) {
   const names = (await readdir(folder(directory)).catch(() => [])).filter((name) => recordName.test(name));
-  const records = [];
-  for (const name of names) {
+  const entries = await Promise.all(names.map(async (name) => {
     const pid = Number(name.slice(0, -5));
-    if (isAlive(pid)) continue;
     const record = await readFile(join(folder(directory), name), 'utf8').then(JSON.parse).catch(() => undefined);
-    if (record?.pid === pid && await usable(record)) records.push(record);
+    return { pid, record, live: isAlive(pid) };
+  }));
+  const liveFiles = new Set(entries.filter(({ pid, record, live }) => live && record?.pid === pid && typeof record.sessionFile === 'string').map(({ record }) => record.sessionFile));
+  const records = [];
+  for (const { pid, record, live } of entries) {
+    if (live) continue;
+    // Only retire recovery after a live replacement records the same saved
+    // conversation. Creating a tmux pane alone does not prove Pi started.
+    if (record?.pid === pid && await usable(record) && !liveFiles.has(record.sessionFile)) records.push(record);
     else await removeRecord(directory, pid);
   }
   return records.sort((a, b) => (b.updated || 0) - (a.updated || 0));

@@ -80,7 +80,7 @@ On a hardware keyboard, **Ctrl+Enter** sends; Enter adds a new line.
 ### The screen
 
 - **Top bar:** the session's title, a status dot (green ready, amber working, red disconnected) and its folder. Tap it to open **Sessions**. The icons on the right are **New session**, **History** and **Settings**.
-- **Middle:** your latest question and Pi's reply. Long replies scroll inside this area; History shows the whole conversation, newest first.
+- **Middle:** your latest question and Pi's reply. Long replies scroll inside this area; History shows the recent conversation (up to 40 messages), newest first.
 - **Bottom:** the composer with the paperclip, microphone and send button. Short status messages appear above it and fade; errors stay until your next action.
 
 The chat shows complete messages, not the reply token by token. To follow a reply while it is being written, open Activity. **Pull down** on the conversation to refresh it right away; it also updates by itself every 1.5 seconds.

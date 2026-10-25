@@ -34,6 +34,16 @@ test('stopped records are newest first, skip live PIDs and drop unusable entries
   assert.deepEqual((await readdir(join(h.directory, 'running'))).sort(), ['5.json', '7.json']);
 });
 
+test('a replaced PID is no longer offered for restore once another live Pi records the same conversation', async (t) => {
+  const h = await fixture(t);
+  const sessionFile = await h.file('resumed');
+  await writeRecord(h.directory, { pid: 5, sessionFile, cwd: h.project, title: 'Stopped' });
+  assert.deepEqual((await stoppedRecords(h.directory, { isAlive: () => false })).map((record) => record.pid), [5], 'Keep recovery until the replacement actually records its session');
+  await writeRecord(h.directory, { pid: 7, sessionFile, cwd: h.project, title: 'Resumed' });
+  assert.deepEqual(await stoppedRecords(h.directory, { isAlive: (pid) => pid === 7 }), []);
+  assert.deepEqual(await readdir(join(h.directory, 'running')), ['7.json']);
+});
+
 test('the native host resumes the latest stopped main session in its folder, else continues in home', async (t) => {
   const h = await fixture(t);
   const isAlive = () => false;

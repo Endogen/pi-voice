@@ -6,7 +6,7 @@ import { pathToFileURL } from 'node:url';
 import { setTimeout as delay } from 'node:timers/promises';
 import { chooseConnection, discoverConnections } from './connection.mjs';
 import { stateDir } from '../extension.mjs';
-import { removeRecord, stoppedRecords } from '../running.mjs';
+import { stoppedRecords } from '../running.mjs';
 
 const exec = promisify(execFile);
 
@@ -34,8 +34,9 @@ export async function runNativeHost({ directory = stateDir, socket = 'pi-voice-n
   if (!present) {
     const plan = await launchPlan({ directory, cwd, args });
     await command('new-session', '-d', '-s', session, '-x', '100', '-y', '36', '-c', plan.cwd, pi, ...plan.args);
-    // The new Pi writes its own record; older main-session records are stale.
-    for (const record of plan.stale) await removeRecord(directory, record.pid);
+    // Do not discard any recovery records here: the pane may exit before Pi
+    // starts. stoppedRecords retires only duplicates of a live replacement;
+    // other stopped conversations remain available under Restore.
   }
   do {
     await delay(interval);

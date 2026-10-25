@@ -4,7 +4,12 @@ import { mkdtemp, readdir, readFile, rm, stat } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createVoiceBridge } from '../bridge.mjs';
+import { writeRecord } from '../running.mjs';
 
+// These mocked Pi contexts are not panes in the reviewer's actual terminal.
+// Node runs this test file in its own process; don't inherit a native tmux pane.
+delete process.env.TMUX;
+delete process.env.TMUX_PANE;
 const temp = await mkdtemp(join(tmpdir(), 'pi-voice-test-'));
 process.env.PI_CODING_AGENT_DIR = temp;
 process.env.PI_VOICE_RPC = '1';
@@ -255,6 +260,20 @@ test('parallel sessions are launched once per request, listed without credential
   assert.equal(h.shutdowns(), 0);
 });
 
+test('concurrent retries of a parallel-session request launch exactly one Pi', async (t) => {
+  const launched = [];
+  const h = harness('rpc', { launch: async (options) => { launched.push(options); } });
+  await h.events.get('session_start')({ reason: 'startup' }, h.ctx);
+  t.after(() => h.events.get('session_shutdown')({ reason: 'quit' }, h.ctx));
+  const ep = await endpoint();
+  const responses = await Promise.all(Array.from({ length: 4 }, () => fetch(`${ep.origin}/api/session/spawn`, {
+    method: 'POST', headers: { Authorization: `Bearer ${ep.token}`, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ id: 'concurrent-spawn-request' }),
+  })));
+  assert.ok(responses.every((response) => response.status === 202));
+  assert.equal(launched.length, 1, 'An in-flight retry must share the original launch');
+});
+
 test('a failed launch reports its reason and can be retried', async (t) => {
   let attempts = 0;
   const h = harness('rpc', { launch: async () => { attempts++; throw Object.assign(new Error('Parallel sessions need tmux.'), { status: 501 }); } });
@@ -296,12 +315,14 @@ test('the extension records its open conversation and restores stopped ones by P
   const h = harness('rpc', { launch: async (options) => { launched.push(options); } });
   const sessionFile = join(temp, 'saved.jsonl');
   await (await import('node:fs/promises')).writeFile(sessionFile, '{}\n');
-  h.ctx.sessionManager.getSessionFile = () => sessionFile;
+  const currentFile = join(temp, 'current.jsonl');
+  await (await import('node:fs/promises')).writeFile(currentFile, '{}\n');
+  h.ctx.sessionManager.getSessionFile = () => currentFile;
   h.ctx.cwd = temp;
   await h.events.get('session_start')({ reason: 'startup' }, h.ctx);
   t.after(() => h.events.get('session_shutdown')({ reason: 'quit' }, h.ctx));
   const own = JSON.parse(await readFile(join(stateDir, 'running', `${process.pid}.json`), 'utf8'));
-  assert.deepEqual([own.sessionFile, own.cwd, own.title, own.spawned], [sessionFile, temp, 'Test session', false]);
+  assert.deepEqual([own.sessionFile, own.cwd, own.title, own.spawned], [currentFile, temp, 'Test session', false]);
   // A Pi that the phone stopped left this record behind.
   const deadPid = 2147480000;
   await (await import('node:fs/promises')).writeFile(join(stateDir, 'running', `${deadPid}.json`), JSON.stringify({ pid: deadPid, sessionFile, cwd: temp, title: 'Before the phone slept', spawned: true, updated: 1 }));
@@ -315,6 +336,9 @@ test('the extension records its open conversation and restores stopped ones by P
   assert.equal(JSON.stringify(listed).includes('saved.jsonl'), false, 'Session file paths stay private');
   assert.equal((await request('session/restore', { id: 'restore-request-1', pid: deadPid })).status, 202);
   assert.deepEqual(launched, [{ id: 'restore-request-1', cwd: temp, args: ['--session', sessionFile] }]);
+  assert.equal((await (await request('sessions')).json()).stopped[0].pid, deadPid, 'Launch acknowledgement alone must not discard recovery');
+  // Simulate the replacement writing its record only after startup succeeds.
+  await writeRecord(stateDir, { pid: process.ppid, sessionFile, cwd: temp });
   assert.deepEqual((await (await request('sessions')).json()).stopped, []);
   assert.equal((await request('session/restore', { id: 'restore-request-2', pid: deadPid })).status, 410);
   assert.equal((await request('session/restore', { id: 'restore-request-3', pid: process.pid })).status, 410, 'A running Pi is never restored twice');

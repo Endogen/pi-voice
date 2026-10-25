@@ -89,6 +89,7 @@ function textOf(message) {
 export default function installVoiceExtension(pi, { wakeLock = createWakeLock({ directory: join(stateDir, 'wake-lock') }), launch = launchSession } = {}) {
   let bridge;
   const spawned = new Set();
+  const spawning = new Map();
   let versions = {};
   let terminal = {};
   const activity = createActivity();
@@ -139,13 +140,20 @@ export default function installVoiceExtension(pi, { wakeLock = createWakeLock({ 
 
   async function spawnSession(id, record) {
     if (spawned.has(id)) return { ok: true, id };
-    const live = await discoverConnections(stateDir);
-    if (live.length >= maxSessions) throw fail(409, `Up to ${maxSessions} sessions can run at once. Close one first.`);
-    spawned.add(id);
-    try { await launch(record ? { id, cwd: record.cwd, args: ['--session', record.sessionFile] } : { id, cwd: context.cwd }); }
-    catch (error) { spawned.delete(id); throw error; }
-    if (record) await removeRecord(stateDir, record.pid);
-    return { ok: true, id };
+    if (spawning.has(id)) return spawning.get(id);
+    // Reserve the ID before discovery yields: concurrent retries share the
+    // acknowledgement (including failures), not just completed launches.
+    const pending = (async () => {
+      const live = await discoverConnections(stateDir);
+      if (live.length >= maxSessions) throw fail(409, `Up to ${maxSessions} sessions can run at once. Close one first.`);
+      await launch(record ? { id, cwd: record.cwd, args: ['--session', record.sessionFile] } : { id, cwd: context.cwd });
+      spawned.add(id);
+      // Keep a recovery record until the replacement publishes its own. The
+      // stopped-record scan then retires duplicates of that live conversation.
+      return { ok: true, id };
+    })();
+    spawning.set(id, pending);
+    try { return await pending; } finally { spawning.delete(id); }
   }
   const record = () => ({
     pid: process.pid, sessionId: context.sessionManager.getSessionId(), sessionFile: context.sessionManager.getSessionFile(),
