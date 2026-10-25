@@ -35,3 +35,16 @@ document.querySelectorAll('[data-copy]').forEach((block) => {
     setTimeout(() => { button.textContent = 'Copy'; button.classList.remove('done'); }, 1800);
   });
 });
+
+// Name the current release on the download buttons. The links already point
+// at the latest APK; without the API (offline, rate limit) the label stays generic.
+const versionLabels = document.querySelectorAll('[data-latest-version]');
+if (versionLabels.length) {
+  fetch('https://api.github.com/repos/Endogen/pi-voice/releases/latest', { headers: { Accept: 'application/vnd.github+json' } })
+    .then((response) => (response.ok ? response.json() : null))
+    .then((release) => {
+      const version = /^v?(\d+\.\d+(?:\.\d+)?)$/.exec(release?.tag_name ?? '')?.[1];
+      if (version) versionLabels.forEach((label) => { label.textContent = `APK · version ${version}`; });
+    })
+    .catch(() => {});
+}
