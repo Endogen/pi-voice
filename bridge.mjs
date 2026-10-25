@@ -82,10 +82,12 @@ export function termuxSpeech({ signal, timeout = 45000 } = {}) {
 // Relay one authenticated API request to another local Pi bridge sharing this
 // token. The page stays on one origin, so the WebView needs no cross-origin
 // access and the native request policy stays strict.
-function forward(req, res, origin) {
+function forward(req, res, origin, pid) {
   return new Promise((resolve) => {
     const url = new URL(req.url, origin);
-    const headers = { authorization: req.headers.authorization, host: url.host, 'x-pi-voice-via': 'hub' };
+    // The target PID travels along: a different Pi that reused a dead
+    // session's port rejects the request instead of answering for it.
+    const headers = { authorization: req.headers.authorization, host: url.host, 'x-pi-voice-via': 'hub', 'x-pi-voice-pid': String(pid) };
     for (const name of ['content-type', 'content-length']) if (req.headers[name]) headers[name] = req.headers[name];
     const upstream = http.request(url, { method: req.method, headers }, (reply) => {
       res.writeHead(reply.statusCode, { 'Content-Type': reply.headers['content-type'] || 'application/json; charset=utf-8' });
@@ -93,10 +95,12 @@ function forward(req, res, origin) {
       reply.once('end', resolve);
       reply.once('error', () => { res.destroy(); resolve(); });
     });
-    upstream.once('error', () => {
+    upstream.once('error', (error) => {
       if (!res.headersSent) {
-        res.writeHead(502, { 'Content-Type': 'application/json; charset=utf-8' });
-        res.end(JSON.stringify({ error: 'That session stopped responding. Switch sessions and try again.' }));
+        // Nothing listening: that Pi is gone (killed without cleaning up).
+        const gone = error.code === 'ECONNREFUSED';
+        res.writeHead(gone ? 410 : 502, { 'Content-Type': 'application/json; charset=utf-8' });
+        res.end(JSON.stringify({ error: gone ? 'That session is no longer running.' : 'That session stopped responding. Switch sessions and try again.' }));
       } else res.destroy();
       resolve();
     });
@@ -151,10 +155,12 @@ export async function createVoiceBridge({
       const target = req.headers['x-pi-voice-pid'];
       if (target !== undefined && path !== '/api/sessions') {
         if (!/^[1-9]\d{0,9}$/.test(target)) throw fail(400, 'Invalid session.');
+        // Relayed requests are answered only by the Pi they were meant for.
+        if (Number(target) !== pid && req.headers['x-pi-voice-via'] === 'hub') throw fail(410, 'That session is no longer running.');
         if (Number(target) !== pid) {
           const peer = peerOrigin && await peerOrigin(Number(target));
           if (!peer) throw fail(410, 'That session is no longer running.');
-          await forward(req, res, peer);
+          await forward(req, res, peer, Number(target));
           return;
         }
       }

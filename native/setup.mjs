@@ -8,7 +8,7 @@ import { promisify } from 'node:util';
 export function enableExternalApps(contents) {
   const property = /^[\t ]*allow-external-apps[\t ]*=.*$/gm;
   if (property.test(contents)) return contents.replace(property, 'allow-external-apps=true');
-  return `${contents}${contents.endsWith('\n') || !contents ? '' : '\n'}\n# Pi Voice Native: only apps granted RUN_COMMAND may execute in Termux.\nallow-external-apps=true\n`;
+  return `${contents}${contents.endsWith('\n') || !contents ? '' : '\n'}\n# Pi Voice: only apps granted RUN_COMMAND may execute in Termux.\nallow-external-apps=true\n`;
 }
 
 async function main() {
@@ -37,10 +37,10 @@ async function main() {
     console.log('To enable the required interface explicitly: node native/setup.mjs --enable');
   }
   if (args.includes('--install')) {
-    const apk = fileURLToPath(new URL('out/pi-voice-native.apk', import.meta.url));
+    const apk = fileURLToPath(new URL('out/pi-voice.apk', import.meta.url));
     await readFile(apk).catch(() => { throw new Error('Build the APK first: npm run build:native'); });
     await exec(join(prefix, 'bin/termux-open'), ['--view', '--content-type', 'application/vnd.android.package-archive', apk]);
-    console.log('Opened the Android installer. Approve installation, then open Pi Voice Native and grant Run commands in Termux.');
+    console.log('Opened the Android installer. Approve installation, then open Pi Voice and grant Run commands in Termux.');
   }
   console.log('Saved Pi sessions are unchanged.');
 }

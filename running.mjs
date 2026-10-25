@@ -1,5 +1,6 @@
 import { mkdir, readdir, readFile, rm, stat, writeFile } from 'node:fs/promises';
 import { isAbsolute, join } from 'node:path';
+import { processIdentity } from './wake-lock.mjs';
 
 // One private record per running voice-enabled Pi: which conversation it has
 // open and where. If the phone or Android stops Pi, the records left behind
@@ -17,9 +18,20 @@ export async function removeRecord(directory, pid) {
   if (Number.isSafeInteger(pid) && pid > 0) await rm(join(folder(directory), `${pid}.json`), { force: true });
 }
 
-export function alive(pid) {
-  try { process.kill(pid, 0); return true; }
-  catch (error) { return error.code === 'EPERM'; }
+// A Pi we started runs as our own user: EPERM means another app's process
+// took over the PID. A recorded start identity also catches reuse by one of
+// our own processes (Android recycles PIDs quickly after Termux is killed).
+export async function alive(pid, record) {
+  try { process.kill(pid, 0); }
+  catch { return false; }
+  if (!record?.identity) return true;
+  const now = await processIdentity(pid);
+  return !now || now === record.identity;
+}
+
+/** Marks a stopped record as being restored, without changing its age. */
+export async function markRestoring(directory, record, id) {
+  await writeFile(join(folder(directory), `${record.pid}.json`), JSON.stringify({ ...record, restoring: { id, at: Date.now() } }), { mode: 0o600 });
 }
 
 // Only a saved session file in an existing folder can be resumed. Anything
@@ -37,7 +49,7 @@ export async function stoppedRecords(directory, { isAlive = alive } = {}) {
   const entries = await Promise.all(names.map(async (name) => {
     const pid = Number(name.slice(0, -5));
     const record = await readFile(join(folder(directory), name), 'utf8').then(JSON.parse).catch(() => undefined);
-    return { pid, record, live: isAlive(pid) };
+    return { pid, record, live: await isAlive(pid, record) };
   }));
   const liveFiles = new Set(entries.filter(({ pid, record, live }) => live && record?.pid === pid && typeof record.sessionFile === 'string').map(({ record }) => record.sessionFile));
   const records = [];

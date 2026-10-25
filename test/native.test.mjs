@@ -118,12 +118,20 @@ test('native setup is explicit and preserves unrelated Termux properties and com
   assert.match(appended, /\nallow-external-apps=true\n$/);
 });
 
-test('native Android contract has fixed commands, non-exported result receiver and a narrow speech/reconnect/terminal JS bridge', async () => {
+test('native Android contract has fixed commands, non-exported result receiver and a narrow JS bridge', async () => {
   const source = await readFile(new URL('../native/java/com/pivoice/app/MainActivity.java', import.meta.url), 'utf8');
   const manifest = await readFile(new URL('../native/AndroidManifest.xml', import.meta.url), 'utf8');
   const script = await readFile(new URL('../native/host.sh', import.meta.url), 'utf8');
-  const methods = [...source.matchAll(/@JavascriptInterface public void (\w+)/g)].map((match) => match[1]);
-  assert.deepEqual(methods, ['speakText', 'stopReading', 'startSpeech', 'stopSpeech', 'abortSpeech', 'reconnect', 'openTerminal']);
+  const methods = [...source.matchAll(/@JavascriptInterface public \w+ (\w+)/g)].map((match) => match[1]);
+  assert.deepEqual(methods, ['speakText', 'stopReading', 'startSpeech', 'stopSpeech', 'abortSpeech', 'haptic', 'setReplyAlerts', 'replyAlertStatus', 'reconnect', 'openTerminal']);
+  const receiver = await readFile(new URL('../native/java/com/pivoice/app/ReplyReceiver.java', import.meta.url), 'utf8');
+  // Reply alerts: HMAC-verified before anything else, then only in the background.
+  assert.match(receiver, /if \(!ReplyAlerts\.verify\(prefs\.getString\(Prefs\.TOKEN, null\)[^\n]+\) return;\s+\/\/[^\n]+\s+if \(MainActivity\.inForeground\(\)/);
+  assert.match(receiver, /PendingIntent\.FLAG_IMMUTABLE/);
+  assert.match(source, /openPid = pid > 0 && key != null && key\.equals\(Prefs\.openKey\(this\)\) \? pid : 0;/, 'Only our own notifications may pick a session');
+  assert.match(source, /web\.evaluateJavascript\("window\.__piVoiceOpenSession && window\.__piVoiceOpenSession\(" \+ pid \+ "\)"/, 'The session is passed as an int, never as script text');
+  assert.equal([...manifest.matchAll(/android:exported="true"/g)].length, 2, 'Only the launcher Activity and the signed reply receiver are exported');
+  assert.match(manifest, /<receiver android:name=".ReplyReceiver" android:exported="true" \/>/);
   assert.match(source, /public void reconnect\(\) \{[\s\S]*?if \(!trustedPage\(\) \|\| !resumed \|\| nonce != null\) return;\s+connect\(\);/, 'Reconnect takes no input and never overlaps an attempt');
   // The page may only name a validated native tmux session; the command is fixed.
   assert.match(source, /final String name = TerminalTarget\.session\(session\);\s+if \(name == null\) return;/);

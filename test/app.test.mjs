@@ -24,11 +24,12 @@ class Element {
   click() { this.clicked = (this.clicked || 0) + 1; return this.listeners.click?.(); }
   scrollIntoView() { throw new Error('Conversation updates must not force-scroll.'); }
 }
-async function setup({ auto = false, speech = true, awake = true, confirmed = true, native = false, playback = false, nativePlayback = true, nativeTerminal = true, nativeReconnect = true } = {}) {
+async function setup({ auto = false, speech = true, awake = true, confirmed = true, native = false, playback = false, nativePlayback = true, nativeTerminal = true, nativeReconnect = true, nativeAlerts = true, alertStatus = 'on' } = {}) {
   const elements = new Map();
   const prompts = [];
   const instances = [];
   const nativeCalls = [];
+  const feedback = [];
   const nativeBridge = native ? {
     startSpeech: (id, lang) => nativeCalls.push({ method: 'start', id, lang }),
     stopSpeech: (id) => nativeCalls.push({ method: 'stop', id }),
@@ -39,6 +40,11 @@ async function setup({ auto = false, speech = true, awake = true, confirmed = tr
     } : {}),
     ...(nativeTerminal ? { openTerminal: (session) => nativeCalls.push({ method: 'terminal', session }) } : {}),
     ...(nativeReconnect ? { reconnect: () => nativeCalls.push({ method: 'reconnect' }) } : {}),
+    ...(nativeAlerts ? {
+      haptic: (kind) => feedback.push({ method: 'haptic', kind }),
+      setReplyAlerts: (notify, sound, ask) => feedback.push({ method: 'alerts', notify, sound, ask }),
+      replyAlertStatus: () => alertStatus,
+    } : {}),
   } : undefined;
   const utterances = [];
   class Utterance { constructor(text) { this.text = text; } }
@@ -92,8 +98,15 @@ async function setup({ auto = false, speech = true, awake = true, confirmed = tr
     },
     addEventListener(event, callback) { this.listeners[event] = callback; },
   };
+  const tones = [];
+  class FakeAudio {
+    constructor() { this.state = 'running'; this.currentTime = 0; this.destination = {}; }
+    resume() { return Promise.resolve(); }
+    createOscillator() { const node = { frequency: {}, connect: (next) => next, start: () => tones.push(node.frequency.value), stop() {} }; return node; }
+    createGain() { return { gain: { setValueAtTime() {}, exponentialRampToValueAtTime() {} }, connect: (next) => next }; }
+  }
   const context = vm.createContext({
-    document, window: { SpeechRecognition: speech ? Speech : undefined, PiVoiceAndroid: nativeBridge, innerHeight: 900, scrollY: 0,
+    document, window: { SpeechRecognition: speech ? Speech : undefined, PiVoiceAndroid: nativeBridge, innerHeight: 900, scrollY: 0, AudioContext: FakeAudio,
       speechSynthesis: playback ? synthesis : undefined, SpeechSynthesisUtterance: playback ? Utterance : undefined },
     location: { hash: '#test-token', pathname: '/' }, history: { replaceState() {} },
     localStorage: { getItem: (key) => values.get(key), setItem: (key, value) => values.set(key, value) },
@@ -124,7 +137,7 @@ async function setup({ auto = false, speech = true, awake = true, confirmed = tr
   });
   vm.runInContext(source, context);
   await flush();
-  return { elements, prompts, instances, nativeCalls, state, sessions, stopped, context, document, values, network, requests, confirmations, imageProcessing, utterances, synthesis, el: (id) => elements.get(id) };
+  return { elements, prompts, instances, nativeCalls, feedback, state, sessions, stopped, tones, context, document, values, network, requests, confirmations, imageProcessing, utterances, synthesis, el: (id) => elements.get(id) };
 }
 function result(text, final = true) {
   return { results: [Object.assign([{ transcript: text }], { isFinal: final })] };
@@ -223,7 +236,7 @@ test('old native shells explain the APK upgrade instead of relying on WebView sy
   const h = await setup({ playback: true, native: true, nativePlayback: false });
   await completedReply(h);
   assert.equal(h.el('read-aloud').disabled, true);
-  assert.match(h.el('read-support').textContent, /APK 0\.1\.2/);
+  assert.match(h.el('read-support').textContent, /Update the Pi Voice app/);
   assert.equal(h.utterances.length, 0);
 });
 
@@ -695,12 +708,12 @@ test('without a reconnect-capable native shell the app explains how to restart P
   const old = await setup({ native: true, nativeReconnect: false });
   old.network.state = () => { throw new Error('Server stopped'); };
   await vm.runInContext('poll()', old.context);
-  assert.match(old.el('notice').textContent, /Update Pi Voice Native/);
+  assert.match(old.el('notice').textContent, /Update the Pi Voice app/);
   assert.equal(old.el('reconnect').hidden, true);
   const page = await setup();
   page.network.state = () => { throw new Error('Server stopped'); };
   await vm.runInContext('poll()', page.context);
-  assert.match(page.el('notice').textContent, /Open Pi Voice Native/);
+  assert.match(page.el('notice').textContent, /Open the Pi Voice app/);
 });
 
 test('sessions that stopped earlier can be restored or dismissed by PID only', async () => {
@@ -1077,7 +1090,7 @@ test('native microphone permission errors name the native app', async () => {
   h.context.window.__piVoiceNativeSpeech(id, 'error', 'not-allowed');
   h.context.window.__piVoiceNativeSpeech(id, 'end', '');
   await flush();
-  assert.match(h.el('notice').textContent, /Pi Voice Native/);
+  assert.match(h.el('notice').textContent, /permission for Pi Voice/);
   assert.equal(h.prompts.length, 0);
 });
 
@@ -1239,13 +1252,13 @@ test('old native shells and plain browsers explain how to reach the terminal ins
   const old = await setup({ native: true, nativeTerminal: false });
   vm.runInContext('renderActivity()', old.context);
   assert.equal(old.el('open-terminal').disabled, true);
-  assert.match(old.el('terminal-hint').textContent, /APK 0\.1\.5/);
+  assert.match(old.el('terminal-hint').textContent, /Update the Pi Voice app/);
   const page = await setup();
   page.state.terminal = { session: 'pi-voice' };
   await vm.runInContext('poll()', page.context);
   vm.runInContext('renderActivity()', page.context);
   assert.equal(page.el('open-terminal').hidden, true);
-  assert.match(page.el('terminal-hint').textContent, /Pi Voice Native/);
+  assert.match(page.el('terminal-hint').textContent, /Pi Voice app/);
 });
 
 function pullDown(h, distance, { dx = 0 } = {}) {
@@ -1286,4 +1299,126 @@ test('pulling down when Pi has stopped reconnects, and other gestures are left a
   pullDown(h, 220);
   assert.equal(h.nativeCalls.filter((call) => call.method === 'reconnect').length, 1);
   assert.match(h.el('notice').textContent, /Starting Pi/);
+});
+
+test('a new reply chimes and vibrates once; switching sessions or loading history does not', async () => {
+  const h = await setup({ native: true });
+  h.document.listeners.pointerdown(); // Android allows audio after the first tap.
+  const haptics = () => h.feedback.filter((call) => call.method === 'haptic').map((call) => call.kind);
+  h.state.messages = [{ id: 'q1', role: 'user', text: 'Run the tests' }];
+  h.state.busy = true;
+  await vm.runInContext('poll()', h.context);
+  // Pi stores its final message before it reports idle.
+  h.state.messages = [...h.state.messages, { id: 'a1', role: 'assistant', text: 'All pass.' }];
+  await vm.runInContext('poll()', h.context);
+  assert.equal(h.tones.length, 0, 'Nothing while Pi is still working');
+  h.state.busy = false;
+  await vm.runInContext('poll()', h.context);
+  assert.deepEqual(h.tones, [659.25, 987.77], 'The first answer of a conversation counts too');
+  assert.deepEqual(haptics(), ['confirm']);
+  await vm.runInContext('poll()', h.context);
+  assert.equal(h.tones.length, 2, 'An unchanged reply is not announced again');
+  h.network.state = (pid) => Response.json(pid === '200' ? { ...h.state, pid: 200, sessionId: 'two', messages: [{ id: 'b1', role: 'assistant', text: 'Other' }] } : h.state);
+  await vm.runInContext('selectTarget(200); poll()', h.context);
+  assert.equal(h.tones.length, 2, 'A switch shows an existing reply silently');
+  h.el('sound').checked = false;
+  h.el('haptics').checked = false;
+  h.network.state = (pid) => Response.json({ ...h.state, pid: 200, sessionId: 'two', messages: [{ id: 'b2', role: 'assistant', text: 'Newer' }] });
+  await vm.runInContext('poll()', h.context);
+  assert.equal(h.tones.length, 2, 'Sound can be turned off');
+  assert.deepEqual(haptics(), ['confirm'], 'Haptics can be turned off');
+});
+
+test('a background session finishing also announces its reply while the app is open', async () => {
+  const h = await setup();
+  h.document.listeners.pointerdown();
+  h.sessions.push({ pid: 200, sessionId: 'two', title: 'Background', cwd: '/project', busy: true, spawned: true });
+  await vm.runInContext('pollSessions()', h.context);
+  h.sessions[1].busy = false;
+  await vm.runInContext('pollSessions()', h.context);
+  assert.equal(h.tones.length, 2);
+  h.document.hidden = true;
+  h.sessions[1].busy = true;
+  await vm.runInContext('pollSessions()', h.context);
+  h.sessions[1].busy = false;
+  await vm.runInContext('pollSessions()', h.context);
+  assert.equal(h.tones.length, 2, 'Hidden pages leave alerts to the app notification');
+});
+
+test('haptics follow actions, and settings reach the native reply receiver', async () => {
+  const h = await setup({ native: true });
+  const calls = (method) => h.feedback.filter((call) => call.method === method);
+  assert.deepEqual(calls('alerts')[0], { method: 'alerts', notify: true, sound: true, ask: true }, 'First start asks for notification permission');
+  assert.equal(h.values.get('pi-voice-notify-asked'), 'true');
+  h.el('draft').value = 'hello';
+  await vm.runInContext('send()', h.context);
+  assert.deepEqual(calls('haptic').map((call) => call.kind), ['confirm']);
+  h.el('sound').checked = false;
+  h.el('sound').listeners.change();
+  assert.deepEqual(calls('alerts').at(-1), { method: 'alerts', notify: true, sound: false, ask: false });
+  h.el('notify').checked = false;
+  h.el('notify').listeners.change();
+  assert.deepEqual(calls('alerts').at(-1), { method: 'alerts', notify: false, sound: false, ask: false });
+  h.el('notify').checked = true;
+  h.el('notify').listeners.change();
+  assert.equal(calls('alerts').at(-1).ask, true, 'Turning notifications on asks again');
+  assert.equal(h.values.get('pi-voice-notify'), 'true');
+  const blocked = await setup({ native: true, alertStatus: 'off' });
+  assert.match(blocked.el('notify-status').textContent, /blocked/);
+  const old = await setup({ native: true, nativeAlerts: false });
+  assert.match(old.el('notify-status').textContent, /Update the Pi Voice app/);
+});
+
+test('a reply notification opens its session', async () => {
+  const h = await setup({ native: true });
+  h.network.state = (pid) => Response.json(pid === '300' ? { ...h.state, pid: 300, sessionId: 'three' } : h.state);
+  h.context.window.__piVoiceOpenSession(300);
+  await flush();
+  assert.equal(h.requests.at(-1).pid, '300');
+  h.context.window.__piVoiceOpenSession('300; alert(1)');
+  h.context.window.__piVoiceOpenSession(-1);
+  await flush();
+  assert.equal(h.requests.at(-1).pid, '300');
+});
+
+test('a parallel session killed without cleanup falls back to the main session instead of sticking', async () => {
+  const h = await setup();
+  h.sessions.push({ pid: 200, sessionId: 'two', title: 'Two', cwd: '/project', spawned: true });
+  await vm.runInContext('pollSessions()', h.context);
+  h.network.state = (pid) => pid === '200' ? Response.json({ error: 'That session stopped responding.' }, { status: 502 }) : Response.json(h.state);
+  await vm.runInContext('selectTarget(200); poll()', h.context);
+  await flush();
+  assert.equal(h.requests.at(-1).pid, undefined, 'Back on the main session');
+  assert.equal(h.values.get('pi-voice-session-pid'), '', 'The dead target is not remembered');
+  assert.equal(h.el('connection').textContent, 'Ready · project');
+});
+
+test('tapping the current session while another one loads switches back', async () => {
+  const h = await setup();
+  h.sessions.push({ pid: 200, sessionId: 'two', title: 'Two', cwd: '/project', spawned: true });
+  await vm.runInContext('pollSessions()', h.context);
+  vm.runInContext('switchTo(200)', h.context);
+  vm.runInContext('switchTo(100)', h.context);
+  await flush();
+  await flush();
+  assert.equal(h.values.get('pi-voice-session-pid'), '', 'The second tap wins');
+});
+
+test('Restore joins a launch in flight and survives a lost acknowledgement', async () => {
+  const h = await setup();
+  h.stopped.push({ pid: 4321, title: 'Earlier', cwd: '/project', updated: Date.now(), restoring: true });
+  await vm.runInContext('pollSessions(); renderSessions()', h.context);
+  await flush();
+  vm.runInContext('renderSessions()', h.context);
+  const row = h.el('stopped-list').children[0];
+  assert.equal(row.children[1].disabled, true, 'A conversation being restored cannot be restored twice');
+  assert.match(row.children[0].children[1].children[1].textContent, /^Restoring…/);
+  h.stopped[0].restoring = false;
+  h.context.fetch = ((original) => async (path, options) => {
+    if (path === '/api/session/restore') throw new TypeError('Network lost');
+    return original(path, options);
+  })(h.context.fetch);
+  await vm.runInContext('restoreSession({ pid: 4321, title: "Earlier" })', h.context);
+  assert.match(h.el('notice').textContent, /Checking whether the session was restored/);
+  assert.ok(vm.runInContext('spawnRequest', h.context), 'Still watching for the launched Pi; no second POST');
 });

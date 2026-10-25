@@ -1,5 +1,21 @@
 # Changelog
 
+## 2.2.0 — Pi Voice app 2.2.0 (versionCode 7)
+
+- **Renamed:** the Android app is now just **Pi Voice** (package `com.pivoice.app` is unchanged, so it updates in place). The APK file is now `pi-voice.apk`, and the app's version now follows the project version.
+- **Reply notifications:** when a run ends with a new reply, the extension tells the app through a signed broadcast. While the app is in the background, Android shows a notification with the start of the reply; tapping it opens that session. Broadcasts are HMAC-signed with the bridge token and expire after 10 minutes, so other apps can't fake them. Android 13+ asks for permission the first time.
+- **Reply chime:** while the app is open, a short synthesized chime plays when the current session or a background session finishes a reply.
+- **Haptic feedback:** light vibrations for recording, sending, switching sessions, the pull-to-refresh threshold and replies, through Android's haptics (no permission; follows the system touch-vibration setting).
+- **Settings → Replies & feedback:** separate switches for notifications, sound and haptics. Sound off also makes notifications silent.
+- **Fixed: stuck on "Disconnected" after a parallel session was killed.** Endpoint records outlive a killed Pi, so the relay kept trying it and the app never fell back. The relay now checks that the target Pi is alive and reports a dead one as gone (410). It also names the target PID, so a different Pi that reused the port refuses to answer for it. The app falls back to the main session on 410 or 502.
+- **Fixed: closing a busy session** let its task run to the end (Pi only quits once idle) and then wrote its record back, so it reappeared under Stopped earlier. Closing now stops the task first and never writes the record again.
+- **Fixed: Restore could start two Pis on one conversation** after a lost acknowledgement or a slow start. The record is marked while a restore is in flight; retries join that launch, the row shows "Restoring…", and a lost acknowledgement is checked instead of re-sent.
+- **Fixed: a recycled PID hid a stopped conversation.** Records now store the process start identity, and a PID owned by another app no longer counts as a running Pi.
+- **Fixed:** tapping the current session while another one was loading did nothing; the "New reply" highlight in Sessions never showed (CSS selector); stay-awake was dropped after `/reload`.
+- **Regression coverage:** executable Java checks for signatures and haptics with a test vector shared with Node, alert wiring in the extension, and frontend tests for reply detection, settings sync and opening a session from a notification; plus a test for each fix above.
+
+Update with `git pull` and `npm run setup`, restart Pi once after its current reply, and install the 2.2.0 app (`npm run build:native`, then `npm run native:install`).
+
 ## 2.1.1 — native APK 0.1.5 (versionCode 6)
 
 - **New always keeps the original running:** idle and busy sessions use the same parallel-Pi launch. Both remain in Sessions and you can switch back before a reply finishes. Draft text and images stay in the composer and are never auto-submitted on a switch. Failed/unsupported launches leave the original untouched; lost acknowledgements are discovered by request ID without a duplicate launch.

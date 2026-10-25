@@ -41,6 +41,7 @@ let hostPid;
 let pollCount = 0;
 let noticeTimer;
 let stopped = [];
+let replyBaseline = null;
 let reconnectOnFailure = false;
 let offline = false;
 let activityData;
@@ -55,8 +56,8 @@ const playback = globalThis.PiVoicePlayback.create({
   onState: () => readingControls(),
   onError: (code) => {
     const hints = {
-      upgrade: 'Update Pi Voice Native to APK 0.1.2 or newer to read replies aloud.',
-      unsupported: 'Read aloud is unavailable here. Update Pi Voice Native.',
+      upgrade: 'Update the Pi Voice app to read replies aloud.',
+      unsupported: 'Read aloud is unavailable here. Update the Pi Voice app.',
       language: 'No voice for this language. Check Read-aloud language in Settings and install a matching Android voice.',
       'text-limit': 'This reply is too long to read aloud (maximum 32000 characters).',
       'audio-busy': 'Audio is busy. Stop other playback and try Read aloud again.',
@@ -73,8 +74,69 @@ $('language').value = storage.get('language') || navigator.language || 'en-US';
 $('engine').value = storage.get('engine') || (SpeechRecognition ? 'browser' : 'termux');
 $('awake').checked = storage.get('awake') !== 'false';
 $('read-language').value = storage.get('read-language') || navigator.language || 'en-US';
+for (const id of ['notify', 'sound', 'haptics']) $(id).checked = storage.get(id) !== 'false';
+// Light feedback through Android's haptics (no permission; follows the system
+// touch-vibration setting). Older apps fall back to the Vibration API.
+function haptic(kind) {
+  if (!$('haptics').checked) return;
+  const bridge = window.PiVoiceAndroid;
+  if (typeof bridge?.haptic === 'function') bridge.haptic(kind);
+  else navigator.vibrate?.(kind === 'reject' ? [30, 60, 30] : kind === 'confirm' ? 25 : 10);
+}
+// A two-note chime, synthesized: no audio file, nothing fetched. Android only
+// lets audio start after a tap, so the context is created on the first one.
+let audio;
+function unlockAudio() {
+  const Context = window.AudioContext || window.webkitAudioContext;
+  if (!audio && Context) { try { audio = new Context(); } catch {} }
+  if (audio?.state === 'suspended') void audio.resume().catch(() => {});
+}
+function chime() {
+  if (!audio || audio.state !== 'running') return;
+  const start = audio.currentTime + 0.02;
+  for (const [index, frequency] of [659.25, 987.77].entries()) {
+    const tone = audio.createOscillator();
+    const gain = audio.createGain();
+    const at = start + index * 0.13;
+    tone.type = 'sine';
+    tone.frequency.value = frequency;
+    gain.gain.setValueAtTime(0.0001, at);
+    gain.gain.exponentialRampToValueAtTime(0.12, at + 0.015);
+    gain.gain.exponentialRampToValueAtTime(0.0001, at + 0.35);
+    tone.connect(gain).connect(audio.destination);
+    tone.start(at);
+    tone.stop(at + 0.4);
+  }
+}
+// A reply finished while the app is open. In the background, the app's
+// notification takes over (the page is paused there).
+function replyArrived() {
+  if (document.hidden) return;
+  if ($('sound').checked) chime();
+  haptic('confirm');
+}
+const alertsCapable = () => typeof window.PiVoiceAndroid?.setReplyAlerts === 'function';
+function alertHint() {
+  const bridge = window.PiVoiceAndroid;
+  let text = 'Shows a notification when a reply finishes while Pi Voice is in the background. Tap it to open that session.';
+  if (!alertsCapable()) text = bridge ? 'Update the Pi Voice app to get reply notifications.' : 'Reply notifications need the Pi Voice app.';
+  else if ($('notify').checked && bridge.replyAlertStatus?.() === 'off') text = 'Notifications are blocked. Allow them for Pi Voice in Android’s app settings.';
+  setText('notify-status', text);
+  $('notify-status').classList.toggle('error', text.startsWith('Notifications are blocked'));
+}
+// Keep the native receiver's preferences in step with Settings. Android 13+
+// asks for permission the first time, or when the user turns notifications on.
+function syncAlerts(ask = false) {
+  if (alertsCapable()) {
+    const first = storage.get('notify-asked') !== 'true';
+    window.PiVoiceAndroid.setReplyAlerts($('notify').checked, $('sound').checked, Boolean(ask || first) && $('notify').checked);
+    storage.set('notify-asked', 'true');
+  }
+  alertHint();
+}
+window.__piVoiceAlerts = alertHint;
 $('read-language').disabled = !playback.supported;
-setText('read-support', playback.supported ? 'Tap the speaker beside Pi’s completed reply to listen. Replies never play automatically.' : playback.needsUpgrade ? 'Update Pi Voice Native to APK 0.1.2 or newer to enable Read aloud.' : 'Read aloud needs Pi Voice Native.');
+setText('read-support', playback.supported ? 'Tap the speaker beside Pi’s completed reply to listen. Replies never play automatically.' : playback.needsUpgrade ? 'Update the Pi Voice app to enable Read aloud.' : 'Read aloud needs the Pi Voice app.');
 function speechHint() {
   return attachments.length ? 'Review images, then send' : $('autosend').checked ? 'Auto-send is on' : 'Review, then send';
 }
@@ -105,7 +167,7 @@ function header() {
   $('sessions-badge').classList.toggle('unread', fresh);
   $('open-sessions').setAttribute('aria-label', `Switch session (${sessions.length || 1} running${fresh ? ', new reply' : ''})`);
 }
-// Pi Voice Native 0.1.4+ can restart Pi from the page, resuming the session.
+// The Pi Voice app (0.1.4+) can restart Pi from the page, resuming the session.
 const canReconnect = () => typeof window.PiVoiceAndroid?.reconnect === 'function';
 function reconnect() {
   if (!canReconnect()) return;
@@ -259,11 +321,11 @@ function terminalControls() {
   const bridge = window.PiVoiceAndroid;
   const capable = typeof bridge?.openTerminal === 'function';
   let hint;
-  if (bridge && !capable) hint = 'Update Pi Voice Native to APK 0.1.5 or newer to open Pi’s terminal from here.';
+  if (bridge && !capable) hint = 'Update the Pi Voice app to open Pi’s terminal from here.';
   else if (bridge && session) hint = 'Opens this Pi’s live terminal in Termux. To leave it running, press Ctrl+B then D. Ctrl+C or Ctrl+D would stop Pi.';
   else if (bridge && !state?.voiceVersion) hint = 'Restart Pi after its current task to identify this session’s terminal.';
   else if (bridge) hint = 'The app could not identify this session’s terminal. It will keep checking; you can also open Termux manually.';
-  else hint = 'Open this page in Pi Voice Native to switch to Pi’s terminal.';
+  else hint = 'Open this page in the Pi Voice app to switch to Pi’s terminal.';
   $('open-terminal').hidden = !bridge;
   $('open-terminal').disabled = !connected || switchPending || !session || !capable;
   setText('terminal-hint', hint);
@@ -547,6 +609,7 @@ function checkSpawn() {
     spawnRequest = undefined;
     selectTarget(match.pid);
     notice(request.restored ? 'Session restored.' : 'New session ready. The previous one keeps running under Sessions.');
+    haptic('confirm');
     void poll();
   } else if (Date.now() >= request.deadline) {
     spawnRequest = undefined;
@@ -572,7 +635,10 @@ function selectTarget(pid) {
 }
 function switchTo(pid) {
   $('sessions-dialog').close();
-  if (pid === currentPid() || sending || preparingImages || sessionStarting()) return;
+  // While a switch loads, the session being opened is the one on screen.
+  const showing = switchPending ? targetPid ?? hostPid : currentPid();
+  if (pid === showing || sending || preparingImages || sessionStarting()) return;
+  haptic('tap');
   selectTarget(pid);
   notice('');
   controls();
@@ -586,11 +652,18 @@ async function restoreSession(item) {
   notice('Restoring the session…');
   controls();
   try {
-    await api('session/restore', { method: 'POST', body: { id: request.id, pid: item.pid }, pid: 0 });
+    const result = await api('session/restore', { method: 'POST', body: { id: request.id, pid: item.pid }, pid: 0 });
+    // A launch already in flight for this conversation is joined, not repeated.
+    if (typeof result?.id === 'string') request.id = result.id;
     stopped = stopped.filter((other) => other.pid !== item.pid);
     await pollSessions();
   } catch (error) {
-    if (spawnRequest === request) { spawnRequest = undefined; notice(error.message, true); }
+    if (spawnRequest === request && error.status) { spawnRequest = undefined; notice(error.message, true); }
+    else if (spawnRequest === request) {
+      // A lost acknowledgement may still have started Pi: look, never re-post.
+      notice('Checking whether the session was restored…');
+      await pollSessions();
+    }
   } finally { controls(); }
 }
 async function forgetSession(item) {
@@ -623,7 +696,7 @@ function stoppedRow(item) {
   title.textContent = item.title || 'Pi session';
   const sub = document.createElement('span');
   sub.className = 'session-sub';
-  sub.textContent = ['Stopped', ago(item.updated), folder(item.cwd)].filter(Boolean).join(' · ');
+  sub.textContent = [item.restoring ? 'Restoring…' : 'Stopped', ago(item.updated), folder(item.cwd)].filter(Boolean).join(' · ');
   text.append(title, sub);
   info.append(dot, text);
   const restore = document.createElement('button');
@@ -631,7 +704,7 @@ function stoppedRow(item) {
   restore.setAttribute('aria-label', `Restore ${title.textContent}`);
   restore.title = 'Restore';
   restore.innerHTML = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 12a9 9 0 1 0 2.6-6.4L3 8"/><path d="M3 3v5h5"/></svg>';
-  restore.disabled = Boolean(spawnRequest);
+  restore.disabled = Boolean(spawnRequest || item.restoring);
   restore.addEventListener('click', () => { void restoreSession(item); });
   const forget = document.createElement('button');
   forget.className = 'icon-button';
@@ -707,7 +780,7 @@ async function pollSessions() {
     for (const item of list) {
       const working = Boolean(item.busy || item.pending);
       // A background session that finishes gets a "new reply" marker.
-      if (item.pid !== currentPid() && sessionBusy.get(item.pid) && !working) unread.add(item.pid);
+      if (item.pid !== currentPid() && sessionBusy.get(item.pid) && !working) { unread.add(item.pid); replyArrived(); }
       sessionBusy.set(item.pid, working);
     }
     for (const pid of [...unread]) if (!list.some((item) => item.pid === pid)) unread.delete(pid);
@@ -732,7 +805,7 @@ async function poll() {
     try { next = await api('state', { pid: requested }); }
     catch (error) {
       // The selected parallel session ended: fall back to the one hosting this page.
-      if (requested && error.status === 410 && requested === targetPid) {
+      if (requested && [410, 502].includes(error.status) && requested === targetPid) {
         selectTarget(undefined);
         stale = true;
         notice('That session has ended. Showing the main session.', true);
@@ -752,9 +825,18 @@ async function poll() {
       // A stopped or failed task may settle without any assistant reply.
       if (changed || isOurQuestion) optimisticQuestion = undefined;
     }
+    // A reply counts once the session is idle again with a different answer
+    // than when it was last idle. Pi may store the final message while still
+    // busy, so consecutive polls are not compared. Switches only set a baseline.
+    const answer = latestExchange(next.messages).answer?.id ?? null;
+    const sameSession = state && !changed && !userSwitch && state.pid === next.pid;
+    const idle = !next.busy && !next.pending;
+    const replied = Boolean(sameSession && idle && answer && answer !== replyBaseline);
+    if (!sameSession || idle) replyBaseline = answer;
     state = next;
     connected = true;
     offline = false;
+    if (replied) replyArrived();
     reconnectOnFailure = false;
     unread.delete(next.pid);
     $('session').textContent = `${next.sessionName} · ${next.sessionId.slice(0, 8)}`;
@@ -790,8 +872,8 @@ async function poll() {
     if (error.status === 401) notice(error.message, true);
     else if (reconnectOnFailure && canReconnect()) { reconnectOnFailure = false; reconnect(); }
     else notice(canReconnect() ? 'Pi isn’t running. Tap Reconnect to start it and resume your conversation.'
-      : window.PiVoiceAndroid ? 'Pi isn’t running. Update Pi Voice Native to reconnect from here, or close the app and tap its icon.'
-        : 'Pi is not reachable. Open Pi Voice Native to start it.', true);
+      : window.PiVoiceAndroid ? 'Pi isn’t running. Update the Pi Voice app to reconnect from here, or close the app and tap its icon.'
+        : 'Pi is not reachable. Open the Pi Voice app to start it.', true);
   } finally {
     polling = false;
     controls();
@@ -817,10 +899,12 @@ async function send() {
     pendingMessage = undefined;
     if (result.queued) optimisticQuestion = undefined;
     notice(result.queued ? 'Sent — queued after Pi’s current task.' : 'Sent to Pi.');
+    haptic('confirm');
     await poll();
   } catch (error) {
     optimisticQuestion = undefined;
     notice(`Not confirmed: ${error.message} Your text and images are kept. Check the conversation before retrying.`, true);
+    haptic('reject');
   } finally {
     sending = false;
     controls();
@@ -852,6 +936,7 @@ async function startSpeech() {
   let error = false;
   let finished = false;
   listening = true;
+  haptic('toggle');
   $('listening').textContent = 'Listening… Pause when done';
   controls();
   const finish = async () => {
@@ -896,7 +981,7 @@ async function startSpeech() {
       if (finished) return;
       error = true;
       const hints = {
-        'not-allowed': 'Allow microphone permission for Pi Voice Native in Android app settings.',
+        'not-allowed': 'Allow microphone permission for Pi Voice in Android app settings.',
         'audio-capture': 'Microphone unavailable. Close other apps using it.',
         'network': 'Speech service network error. Check internet or try the Termux:API engine.',
         'no-speech': 'No speech detected. Try again.',
@@ -950,9 +1035,19 @@ $('clear').addEventListener('click', () => { $('draft').value = ''; setAttachmen
 $('abort').addEventListener('click', async () => {
   const sessionId = state?.sessionId;
   if (!connected || !sessionId || !confirm('Stop Pi’s current task? Already completed actions cannot be undone.')) return;
-  try { await api('abort', { method: 'POST', body: { sessionId } }); optimisticQuestion = undefined; notice('Stop requested.'); await poll(); }
+  try { await api('abort', { method: 'POST', body: { sessionId } }); optimisticQuestion = undefined; notice('Stop requested.'); haptic('tap'); await poll(); }
   catch (err) { notice(err.message, true); }
 });
+for (const id of ['notify', 'sound', 'haptics']) {
+  $(id).addEventListener('change', () => {
+    storage.set(id, String($(id).checked));
+    if (id === 'haptics' && $(id).checked) haptic('toggle');
+    if (id !== 'haptics') syncAlerts(id === 'notify' && $(id).checked);
+  });
+}
+// From a reply notification: show the session it came from.
+window.__piVoiceOpenSession = (pid) => { if (Number.isSafeInteger(pid) && pid > 0) switchTo(pid); };
+document.addEventListener('pointerdown', unlockAudio, { capture: true });
 for (const id of ['autosend', 'engine', 'language']) {
   $(id).addEventListener('change', () => {
     storage.set(id, id === 'autosend' ? String($(id).checked) : $(id).value);
@@ -974,7 +1069,7 @@ for (const name of ['sessions', 'activity', 'history', 'settings']) {
 }
 document.addEventListener('visibilitychange', () => {
   // Coming back to a stopped Pi: the native app restarts it once by itself.
-  if (!document.hidden) { reconnectOnFailure = true; void poll(); }
+  if (!document.hidden) { reconnectOnFailure = true; alertHint(); void poll(); }
   // Never auto-send a recording that was interrupted by switching apps.
   else { cancelRecording(); playback.stop(); }
 });
@@ -1030,7 +1125,9 @@ $('exchange').addEventListener('touchmove', (event) => {
     pull.active = true;
   }
   event.preventDefault();
+  const was = pull.distance;
   pull.distance = Math.min(110, Math.max(0, (dy - 10) * 0.5));
+  if (was < pullThreshold && pull.distance >= pullThreshold) haptic('tick');
   showPull(pull.distance);
 }, { passive: false });
 const endPull = () => {
@@ -1057,5 +1154,6 @@ setInterval(() => {
   if ($('activity-dialog').open) void pollActivity();
 }, 1500);
 setAttachments([]);
+syncAlerts();
 void poll();
 controls();

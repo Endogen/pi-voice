@@ -59,6 +59,6 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
     console.log(`Registered ${result.extension}`);
     if (result.removed.length) console.log(`Removed old launchers:\n${result.removed.join('\n')}\nRemove the old Pi Voice shortcut icon from your home screen.`);
     console.log('Keep this checkout in place. Pi must already be installed/configured.');
-    console.log('Next: install Pi Voice Native (see README.md). No credentials, Termux permissions or Android apps were changed.');
+    console.log('Next: install the Pi Voice app (see README.md). No credentials, Termux permissions or Android apps were changed.');
   } catch (error) { console.error(error.message); process.exitCode = 1; }
 }

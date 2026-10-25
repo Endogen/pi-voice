@@ -14,7 +14,7 @@ function runTermux(command) {
 function processAlive(pid) {
   try { process.kill(pid, 0); return true; } catch (error) { return error.code === 'EPERM'; }
 }
-async function processIdentity(pid) {
+export async function processIdentity(pid) {
   try {
     const text = await readFile(`/proc/${pid}/stat`, 'utf8');
     const start = text.slice(text.lastIndexOf(')') + 1).trim().split(/\s+/)[19];

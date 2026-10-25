@@ -397,6 +397,21 @@ test('relay is unauthenticated-proof and reports a vanished peer as unavailable'
   const anonymous = await fetch(`${bridge.origin}/api/state`, { headers: { 'X-Pi-Voice-Pid': '222' } });
   assert.equal(anonymous.status, 401);
   const gone = await request('/api/state', undefined, { 'X-Pi-Voice-Pid': '222' });
-  assert.equal(gone.status, 502);
-  assert.match((await gone.json()).error, /stopped responding/);
+  assert.equal(gone.status, 410, 'Nothing listening: that Pi was killed');
+  assert.match((await gone.json()).error, /no longer running/);
+});
+
+test('a hung peer is reported as unresponsive, and a reused port never answers for another PID', async (t) => {
+  const reset = http.createServer((req) => req.socket.destroy());
+  await new Promise((resolve) => reset.listen(0, '127.0.0.1', resolve));
+  t.after(() => reset.close());
+  const hung = await setup(t, { pid: 111, peerOrigin: async () => `http://127.0.0.1:${reset.address().port}` });
+  const response = await hung.request('/api/state', undefined, { 'X-Pi-Voice-Pid': '222' });
+  assert.equal(response.status, 502);
+  assert.match((await response.json()).error, /stopped responding/);
+  // Pi 333 now listens where dead Pi 222 used to: the relayed request names 222.
+  const reused = await setup(t, { pid: 333, peerOrigin: async () => { throw new Error('must not relay again'); } });
+  const answer = await reused.request('/api/state', undefined, { 'X-Pi-Voice-Pid': '222', 'X-Pi-Voice-Via': 'hub' });
+  assert.equal(answer.status, 410);
+  assert.equal((await reused.request('/api/state', undefined, { 'X-Pi-Voice-Pid': '333', 'X-Pi-Voice-Via': 'hub' })).status, 200);
 });

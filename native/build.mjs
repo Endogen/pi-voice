@@ -61,11 +61,11 @@ catch {
   await run('keytool', ['-genkeypair', '-alias', 'pi-voice', '-keyalg', 'RSA', '-keysize', '2048', '-validity', '10000', '-dname', 'CN=Pi Voice local build', '-storetype', 'PKCS12', '-keystore', key, '-storepass:file', password, '-keypass:file', password]);
 }
 await chmod(key, 0o600);
-const apk = join(out, 'pi-voice-native.apk');
+const apk = join(out, 'pi-voice.apk');
 await run('apksigner', ['sign', '--ks', key, '--ks-key-alias', 'pi-voice', '--ks-pass', `file:${password}`, '--out', apk, join(out, 'aligned.apk')]);
 await run('apksigner', ['verify', '--verbose', '--print-certs', apk]);
 await run('zipalign', ['-c', '4', apk]);
 await chmod(apk, 0o600);
 const digest = createHash('sha256').update(await readFile(apk)).digest('hex');
-await writeFile(join(out, 'pi-voice-native.apk.sha256'), `${digest}  pi-voice-native.apk\n`, { mode: 0o600 });
+await writeFile(join(out, 'pi-voice.apk.sha256'), `${digest}  pi-voice.apk\n`, { mode: 0o600 });
 console.log(`\nBuilt ${apk}\nSHA-256: ${digest}\nExisting shortcuts and Termux security settings were not changed.`);

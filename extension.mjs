@@ -4,11 +4,12 @@ import { homedir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { execFile } from 'node:child_process';
 import { createVoiceBridge } from './bridge.mjs';
-import { createWakeLock } from './wake-lock.mjs';
+import { createWakeLock, processIdentity } from './wake-lock.mjs';
 import { imageLimits } from './image-attachments.mjs';
 import { discoverConnections, readEndpoint } from './discovery.mjs';
 import { createActivity } from './activity.mjs';
-import { removeRecord, stoppedRecord, stoppedRecords, writeRecord } from './running.mjs';
+import { sendReplyAlert } from './notify.mjs';
+import { alive, markRestoring, removeRecord, stoppedRecord, stoppedRecords, writeRecord } from './running.mjs';
 
 export const stateDir = join(process.env.PI_CODING_AGENT_DIR || join(homedir(), '.pi', 'agent'), 'voice');
 
@@ -79,6 +80,8 @@ export function createTerminal({ detect = detectTerminal, now = Date.now } = {})
 }
 
 const maxSessions = 4;
+// A restore in flight for less than two minutes blocks a second launch.
+const restoringNow = (restoring) => Boolean(restoring && Date.now() - restoring.at < 120000);
 const spawnId = /^[a-zA-Z0-9-]{8,80}$/.test(process.env.PI_VOICE_SPAWN_ID || '') ? process.env.PI_VOICE_SPAWN_ID : undefined;
 const fail = (status, message) => Object.assign(new Error(message), { status });
 
@@ -103,12 +106,16 @@ function textOf(message) {
   return (message.content || []).filter((part) => part.type === 'text').map((part) => part.text).join('\n');
 }
 
-export default function installVoiceExtension(pi, { wakeLock = createWakeLock({ directory: join(stateDir, 'wake-lock') }), launch = launchSession, getTerminal = createTerminal() } = {}) {
+export default function installVoiceExtension(pi, { wakeLock = createWakeLock({ directory: join(stateDir, 'wake-lock') }), launch = launchSession, getTerminal = createTerminal(), alert = sendReplyAlert } = {}) {
   let bridge;
   const spawned = new Set();
   const spawning = new Map();
   let versions = {};
   const activity = createActivity();
+  let bridgeToken;
+  let answerBefore;
+  let closing = false;
+  const identity = processIdentity(process.pid);
   void detectVersions().then((found) => { versions = found; }, () => {});
   let context;
   let starting;
@@ -161,6 +168,8 @@ export default function installVoiceExtension(pi, { wakeLock = createWakeLock({ 
     const pending = (async () => {
       const live = await discoverConnections(stateDir);
       if (live.length >= maxSessions) throw fail(409, `Up to ${maxSessions} sessions can run at once. Close one first.`);
+      // Mark first: a retried or second Restore then reuses this launch.
+      if (record) await markRestoring(stateDir, record, id);
       await launch(record ? { id, cwd: record.cwd, args: ['--session', record.sessionFile] } : { id, cwd: context.cwd });
       spawned.add(id);
       // Keep a recovery record until the replacement publishes its own. The
@@ -174,7 +183,11 @@ export default function installVoiceExtension(pi, { wakeLock = createWakeLock({ 
     pid: process.pid, sessionId: context.sessionManager.getSessionId(), sessionFile: context.sessionManager.getSessionFile(),
     cwd: context.cwd, spawned: Boolean(spawnId), title: context.sessionManager.getSessionName() || firstQuestion() || 'New session',
   });
-  const saveRecord = () => writeRecord(stateDir, record()).catch(() => {});
+  // A session being closed from the app must not write its record back.
+  const saveRecord = async () => {
+    if (closing) return;
+    try { await writeRecord(stateDir, { ...record(), identity: await identity }); } catch {}
+  };
 
   const readMessages = () => context.sessionManager.getBranch()
     .filter((entry) => entry.type === 'message' && ['user', 'assistant'].includes(entry.message.role))
@@ -192,16 +205,19 @@ export default function installVoiceExtension(pi, { wakeLock = createWakeLock({ 
     if (starting) return starting;
     starting = (async () => {
       const token = await loadToken();
+      bridgeToken = token;
       const created = await createVoiceBridge({
         token, port,
         getState: snapshot,
         getActivity: () => ({ ...activity.snapshot(), terminal: getTerminal() }),
         listSessions: async () => (await discoverConnections(stateDir)).map(({ url, ...session }) => session),
         // Conversations whose Pi stopped (phone off, Android killed Termux).
-        listStopped: async () => (await stoppedRecords(stateDir)).map(({ pid, title, cwd, updated }) => ({ pid, title, cwd, updated })),
+        listStopped: async () => (await stoppedRecords(stateDir)).map(({ pid, title, cwd, updated, restoring }) => ({ pid, title, cwd, updated, restoring: restoringNow(restoring) })),
         async onRestore(id, pid) {
           const found = await stoppedRecord(stateDir, pid);
           if (!found && !spawned.has(id)) throw fail(410, 'That session can no longer be restored.');
+          // Never start two Pis on one conversation: report the launch in flight.
+          if (found && restoringNow(found.restoring) && found.restoring.id !== id) return { ok: true, id: found.restoring.id };
           return spawnSession(id, found);
         },
         async onForget(pid) {
@@ -209,6 +225,8 @@ export default function installVoiceExtension(pi, { wakeLock = createWakeLock({ 
           return { ok: true };
         },
         peerOrigin: async (pid) => {
+          // Endpoint files outlive a killed Pi; a dead PID is not a peer.
+          if (!await alive(pid)) return;
           const endpoint = await readEndpoint(stateDir, pid);
           return endpoint?.token === token ? endpoint.origin : undefined;
         },
@@ -216,8 +234,13 @@ export default function installVoiceExtension(pi, { wakeLock = createWakeLock({ 
         onClose() {
           // Only app-started sessions: never quit a Pi the user runs in a terminal.
           if (!spawnId) throw fail(409, 'Only sessions started from the app can be closed here. Quit this one in Termux.');
-          // Closed on purpose: never offer it for restoring later.
-          setImmediate(() => { void removeRecord(stateDir, process.pid).finally(() => context.shutdown()); });
+          // Closed on purpose: stop its task (Pi only quits once idle) and
+          // never offer it for restoring later.
+          closing = true;
+          setImmediate(() => {
+            try { if (!context.isIdle()) context.abort(); } catch {}
+            void removeRecord(stateDir, process.pid).finally(() => context.shutdown());
+          });
           return { ok: true };
         },
         onPrompt(text, images = []) {
@@ -271,7 +294,8 @@ export default function installVoiceExtension(pi, { wakeLock = createWakeLock({ 
     const old = bridge;
     bridge = undefined;
     if (old && ['new', 'resume', 'fork', 'reload'].includes(event?.reason)) {
-      await writeFile(reconnectFile, JSON.stringify({ port: Number(new URL(old.origin).port) }), { mode: 0o600 })
+      // The replacement runtime keeps the port and the stay-awake state.
+      await writeFile(reconnectFile, JSON.stringify({ port: Number(new URL(old.origin).port), awake: wakeLock.status().active }), { mode: 0o600 })
         .catch((error) => context?.ui.notify(`Pi Voice reconnect: ${error.message}`, 'warning'));
     } else await unlink(reconnectFile).catch(() => {});
     await old?.close();
@@ -287,6 +311,7 @@ export default function installVoiceExtension(pi, { wakeLock = createWakeLock({ 
       await unlink(reconnectFile).catch(() => {});
       const port = Number.isInteger(reconnect?.port) && reconnect.port > 0 && reconnect.port < 65536 ? reconnect.port : undefined;
       await start(ctx, port);
+      if (reconnect?.awake === true) await wakeLock.setEnabled(true).catch(() => {});
     } catch (error) {
       ctx.ui.notify(`Pi Voice: ${error.message}`, 'error');
     }
@@ -295,9 +320,26 @@ export default function installVoiceExtension(pi, { wakeLock = createWakeLock({ 
   // Keep the live context current; history is read only when a snapshot is requested.
   // Live activity for the app's Activity sheet. One handler per event: each
   // also keeps the live context current while the bridge runs.
+  const latestAnswer = (ctx) => {
+    const branch = ctx?.sessionManager?.getBranch?.() || [];
+    for (let i = branch.length - 1; i >= 0; i--) {
+      const entry = branch[i];
+      if (entry.type === 'message' && entry.message.role === 'assistant' && textOf(entry.message).trim()) return entry;
+    }
+  };
+  // Tell the app when a run ends with a new reply; it notifies only if closed.
+  const replyFinished = (ctx) => {
+    const answer = latestAnswer(ctx);
+    if (!bridge || !answer || answer.id === answerBefore) return;
+    answerBefore = answer.id;
+    try {
+      alert({ token: bridgeToken, pid: process.pid, text: textOf(answer.message),
+        title: ctx.sessionManager.getSessionName() || firstQuestion() || 'Pi replied' });
+    } catch { /* Alerts are best effort. */ }
+  };
   const track = {
-    agent_start: () => activity.start(),
-    agent_settled: () => { activity.settle(); if (bridge) void saveRecord(); },
+    agent_start: (_event, ctx) => { activity.start(); answerBefore = latestAnswer(ctx)?.id; },
+    agent_settled: (_event, ctx) => { activity.settle(); if (bridge) { void saveRecord(); replyFinished(ctx); } },
     session_info_changed: () => { if (bridge) void saveRecord(); },
     message_update: (event) => activity.stream(event.assistantMessageEvent),
     tool_execution_start: (event) => activity.toolStart(event),
@@ -308,7 +350,7 @@ export default function installVoiceExtension(pi, { wakeLock = createWakeLock({ 
   };
   for (const event of ['message_end', 'agent_start', 'agent_settled', 'model_select', 'session_tree', 'session_compact', 'session_info_changed', 'message_update', 'tool_execution_start', 'tool_execution_update', 'tool_execution_end', 'ui_prompt_start', 'ui_prompt_end']) {
     pi.on(event, (data, ctx) => {
-      try { track[event]?.(data || {}); } catch { /* Activity is informational only. */ }
+      try { track[event]?.(data || {}, ctx); } catch { /* Activity is informational only. */ }
       if (!bridge || !ctx) return;
       context = ctx;
     });
@@ -335,7 +377,7 @@ export default function installVoiceExtension(pi, { wakeLock = createWakeLock({ 
   });
 
   pi.registerCommand('voice', {
-    description: 'Connect Pi Voice Native to this Pi (/voice stop | awake | sleep)',
+    description: 'Connect the Pi Voice app to this Pi (/voice stop | awake | sleep)',
     handler: async (args, ctx) => {
       const action = args.trim();
       if (action === 'stop') { await stop(); ctx.ui.notify('Pi Voice disconnected from this Pi.', 'info'); return; }
@@ -349,7 +391,7 @@ export default function installVoiceExtension(pi, { wakeLock = createWakeLock({ 
         await start(ctx);
         await wakeLock.setEnabled(true).catch((error) => ctx.ui.notify(`Stay awake unavailable: ${error.message}`, 'warning'));
         if (action === 'awake') ctx.ui.notify(wakeLock.status().active ? 'Termux wake lock requested. Android battery restrictions still apply.' : 'Stay awake could not be enabled. Check Android/Termux.', wakeLock.status().active ? 'info' : 'warning');
-        else ctx.ui.notify('Pi Voice is connected. Open Pi Voice Native.', 'info');
+        else ctx.ui.notify('Pi Voice is connected. Open the Pi Voice app.', 'info');
       } catch (error) {
         ctx.ui.notify(`Pi Voice: ${error.message}`, 'error');
       }

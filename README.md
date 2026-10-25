@@ -20,6 +20,7 @@ An Android app for talking to the [Pi coding agent](https://github.com/earendil-
 - **Picks up where you left off:** if the phone or Android stops Pi, the app restarts it and reopens the conversation you had open.
 - **Images:** attach up to four screenshots or photos for vision-capable models.
 - **Read aloud:** listen to a finished reply on request.
+- **Know when Pi is done:** a chime and a light vibration when a reply arrives, and a notification when the app is in the background.
 - **Local and private:** the app talks to an authenticated bridge on `127.0.0.1` inside your own Pi.
 
 ## How it works
@@ -27,7 +28,7 @@ An Android app for talking to the [Pi coding agent](https://github.com/earendil-
 Pi Voice has two parts:
 
 1. **A Pi extension** (this repository, in Termux). It runs inside Pi and serves the chat interface and a small API on `127.0.0.1`, protected by a random token. It submits your messages to Pi exactly like typed prompts.
-2. **Pi Voice Native** (an Android app built from [`native/`](native/README.md)). It starts or finds Pi through Termux in the background, then shows the chat in a WebView with Android speech recognition, text-to-speech and an image picker.
+2. **The Pi Voice app** (built from [`native/`](native/README.md)). It starts or finds Pi through Termux in the background, then shows the chat in a WebView with Android speech recognition, text-to-speech and an image picker.
 
 When nothing is running, the app starts Pi in a private tmux server (`tmux -L pi-voice-native`) and keeps it registered with Termux, so no terminal window is needed.
 
@@ -51,7 +52,7 @@ npm run setup
 
 `npm run setup` registers the extension with Pi (`~/.pi/agent/extensions/pi-voice.ts`). It refuses to overwrite unrelated files, and it doesn't install Pi, change credentials or request Android permissions. No `npm install` is needed: the interface, artwork and Markdown parser are included. Keep the checkout in place.
 
-**2. Get the app.** Either download `pi-voice-native.apk` and `pi-voice-native.apk.sha256` from [Releases](https://github.com/Endogen/pi-voice/releases) into `~/pi-voice/native/out/` and check them with `sha256sum -c pi-voice-native.apk.sha256` in that folder, or [build it yourself](native/README.md#build-on-termux) with `npm run build:native`.
+**2. Get the app.** Either download `pi-voice.apk` and `pi-voice.apk.sha256` from [Releases](https://github.com/Endogen/pi-voice/releases) into `~/pi-voice/native/out/` and check them with `sha256sum -c pi-voice.apk.sha256` in that folder, or [build it yourself](native/README.md#build-on-termux) with `npm run build:native`.
 
 **3. Install and allow it:**
 
@@ -60,7 +61,7 @@ cd ~/pi-voice
 npm run native:install -- --enable
 ```
 
-This sets `allow-external-apps=true` in `~/.termux/termux.properties` (after a backup) and opens Android's installer. Approve the installation, open **Pi Voice Native**, and grant **Run commands in Termux**. The microphone permission is requested the first time you speak.
+This sets `allow-external-apps=true` in `~/.termux/termux.properties` (after a backup) and opens Android's installer. Approve the installation, open the **Pi Voice** app, and grant **Run commands in Termux**. The microphone permission is requested the first time you speak.
 
 > **Security:** "Run commands in Termux" is a broad permission. Android does not limit it to Pi Voice's own commands, so only grant it to apps you trust. Pi Voice itself only ever runs its fixed helper scripts; see [native/README.md](native/README.md#webview-security).
 
@@ -128,10 +129,22 @@ Unsaved state is gone when Pi stops: a reply that was still being written, queue
 
 The model selected in Pi must accept images; otherwise sending is refused with an explanation rather than dropping the images. Images are decoded on the phone, scaled to at most 2048 px, and re-encoded as JPEG, which also removes their metadata. Limits: 15 MiB and 40 megapixels per original, 3 MiB per prepared image and 8 MiB in total. SVG, GIF, HEIC and other files aren't supported.
 
+### Notifications, sounds and haptics
+
+When Pi finishes a reply:
+
+- **While the app is open,** it plays a short chime and vibrates lightly. This also happens when a session in the background finishes.
+- **While the app is in the background or closed,** Android shows a notification with the start of the reply. Tapping it opens that session. Opening the app clears these notifications.
+
+The app also vibrates lightly when you start recording, send, switch sessions and pull down far enough to refresh. Notifications, the chime and haptics each have a switch under **Settings → Replies & feedback**. The notification sound and how notifications appear are Android settings: long-press a Pi Voice notification, or open **Android Settings → Apps → Pi Voice → Notifications**. Android 13 and newer ask for permission the first time.
+
+Notifications come from the Pi extension in Termux, which tells the app when a reply is finished. Each message is signed with the bridge token, so other apps can't create Pi Voice notifications. The notification shows the start of the reply; on the lock screen Android hides it unless you allow private content.
+
 ### Settings
 
 - **Voice input:** auto-send, speech engine (Android speech, or Termux:API as a fallback) and speech language.
 - **Voice output:** the read-aloud language, for example `en-US` or `de-DE`. Install matching voices in Android's text-to-speech settings.
+- **Replies & feedback:** reply notifications, the reply chime and haptic feedback.
 - **Keep Pi available:** the Termux wake lock (see below).
 - **Connected Pi:** the session, folder and model.
 - **About:** the Pi Voice and Pi versions of the connected session, with a note if it still runs an older Pi Voice backend.
@@ -195,8 +208,10 @@ To rotate the token, quit all Pi instances, delete `~/.pi/agent/voice/token` and
 | Open in Termux is greyed out | Install APK 0.1.5+, restart an older Pi backend, and wait for the selected session to connect. Current backends retry failed terminal lookups after a five-second cooldown; give the app a few seconds to recover. For a manually started Pi outside native tmux, use its original Termux tab. |
 | Pi stopped after Open in Termux | Ctrl+C or Ctrl+D reached Pi. Use Ctrl+B, then D next time; tap **Reconnect** to restart it. |
 | Images are rejected | Select a vision-capable model in Pi, and use JPEG, PNG or WebP within the limits. |
-| Microphone denied | Android Settings → Apps → Pi Voice Native → Permissions → Microphone. |
+| Microphone denied | Android Settings → Apps → Pi Voice → Permissions → Microphone. |
 | Speech errors | Check the speech language in Settings and your connection; try the Termux:API engine or your keyboard's microphone. |
+| No reply notifications | Check **Settings → Replies & feedback**, allow notifications for Pi Voice in Android's settings, and update both the app and the Pi backend (restart Pi). Notifications only appear while the app is in the background. |
+| No chime | Check the media volume and **Sound when Pi replies**. Android only allows sound after you have tapped the app once. |
 | Read aloud is silent | Install a voice for the read-aloud language in Android's text-to-speech settings and check media volume. |
 
 ## Development
@@ -208,6 +223,7 @@ To rotate the token, quit all Pi instances, delete `~/.pi/agent/voice/token` and
 | `discovery.mjs` | Finds running bridges from private endpoint records. |
 | `running.mjs` | Records which conversations are open, for restoring them after Pi stops. |
 | `activity.mjs` | Bounded in-memory log of Pi's current task. |
+| `notify.mjs` | Signed "Pi replied" broadcasts to the app for notifications. |
 | `image-attachments.mjs`, `wake-lock.mjs` | Upload validation and limits; Termux wake-lock leases. |
 | `src/` | Interface logic and the safe Markdown renderer. `npm run build` bundles it into `public/app.js`. |
 | `public/` | The page served to the app: HTML, CSS, icons and the generated bundle. |

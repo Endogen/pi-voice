@@ -425,15 +425,86 @@ test('the extension records its open conversation and restores stopped ones by P
     body: body ? JSON.stringify(body) : undefined,
   });
   const listed = await (await request('sessions')).json();
-  assert.deepEqual(listed.stopped, [{ pid: deadPid, title: 'Before the phone slept', cwd: temp, updated: 1 }]);
+  assert.deepEqual(listed.stopped, [{ pid: deadPid, title: 'Before the phone slept', cwd: temp, updated: 1, restoring: false }]);
   assert.equal(JSON.stringify(listed).includes('saved.jsonl'), false, 'Session file paths stay private');
   assert.equal((await request('session/restore', { id: 'restore-request-1', pid: deadPid })).status, 202);
   assert.deepEqual(launched, [{ id: 'restore-request-1', cwd: temp, args: ['--session', sessionFile] }]);
-  assert.equal((await (await request('sessions')).json()).stopped[0].pid, deadPid, 'Launch acknowledgement alone must not discard recovery');
+  const pending = (await (await request('sessions')).json()).stopped[0];
+  assert.deepEqual([pending.pid, pending.restoring, pending.updated], [deadPid, true, 1], 'Launch acknowledgement alone must not discard recovery');
+  // A retry or a second tap with a fresh ID joins the launch in flight.
+  assert.deepEqual(await (await request('session/restore', { id: 'restore-request-again', pid: deadPid })).json(), { ok: true, id: 'restore-request-1' });
+  assert.equal(launched.length, 1, 'Never two Pis on one conversation');
   // Simulate the replacement writing its record only after startup succeeds.
   await writeRecord(stateDir, { pid: process.ppid, sessionFile, cwd: temp });
   assert.deepEqual((await (await request('sessions')).json()).stopped, []);
   assert.equal((await request('session/restore', { id: 'restore-request-2', pid: deadPid })).status, 410);
   assert.equal((await request('session/restore', { id: 'restore-request-3', pid: process.pid })).status, 410, 'A running Pi is never restored twice');
   assert.equal((await request('session/restore', { id: 'restore-request-4', pid: '../x' })).status, 400);
+});
+
+test('a finished run with a new reply alerts the app once; runs without one do not', async (t) => {
+  const alerts = [];
+  const h = harness('rpc', { alert: (details) => alerts.push(details) });
+  await h.events.get('session_start')({ reason: 'startup' }, h.ctx);
+  t.after(() => h.events.get('session_shutdown')({ reason: 'quit' }, h.ctx));
+  const ep = await endpoint();
+  h.events.get('agent_start')({}, h.ctx);
+  h.events.get('agent_settled')({}, h.ctx);
+  assert.equal(alerts.length, 0, 'No reply, no alert');
+  h.events.get('agent_start')({}, h.ctx);
+  h.branch.push({ type: 'message', id: 'reply-1', message: { role: 'assistant', content: [{ type: 'thinking', thinking: 'hidden' }, { type: 'text', text: 'All **12** tests pass.' }] } });
+  h.events.get('agent_settled')({}, h.ctx);
+  assert.equal(alerts.length, 1);
+  assert.deepEqual([alerts[0].pid, alerts[0].title, alerts[0].text, alerts[0].token], [process.pid, 'Test session', 'All **12** tests pass.', ep.token]);
+  h.events.get('agent_settled')({}, h.ctx);
+  assert.equal(alerts.length, 1, 'A repeated settle does not alert twice');
+});
+
+test('closing a busy app-started session aborts its task and keeps it out of Restore', async (t) => {
+  process.env.PI_VOICE_SPAWN_ID = 'spawned-for-test-1';
+  const { default: installSpawned } = await import('../extension.mjs?spawned');
+  delete process.env.PI_VOICE_SPAWN_ID;
+  const sessionFile = join(temp, 'closing.jsonl');
+  await (await import('node:fs/promises')).writeFile(sessionFile, '{}\n');
+  const events = new Map();
+  let busy = true;
+  const calls = [];
+  const ctx = {
+    mode: 'rpc', cwd: temp, model: { provider: 'test', id: 'm', input: ['text'] }, ui: { notify() {}, setStatus() {} },
+    isIdle: () => !busy, hasPendingMessages: () => false,
+    abort: () => { calls.push('abort'); busy = false; }, shutdown: () => calls.push('shutdown'),
+    sessionManager: { getSessionFile: () => sessionFile, getSessionId: () => 'closing', getSessionName: () => 'Closing', getBranch: () => [] },
+  };
+  installSpawned({ on: (name, handler) => events.set(name, handler), registerFlag() {}, getFlag: () => false, registerCommand() {}, sendUserMessage() {} },
+    { wakeLock: { status: () => ({ active: false }), setEnabled: async () => ({}), close: async () => {} } });
+  await events.get('session_start')({ reason: 'startup' }, ctx);
+  t.after(() => events.get('session_shutdown')({ reason: 'quit' }, ctx));
+  const ep = JSON.parse(await readFile(join(stateDir, 'endpoints', `${process.pid}.json`), 'utf8'));
+  const response = await fetch(`${ep.origin}/api/session/close`, {
+    method: 'POST', headers: { Authorization: `Bearer ${ep.token}`, 'Content-Type': 'application/json', 'X-Pi-Voice-Via': 'hub' },
+    body: JSON.stringify({ sessionId: 'closing' }),
+  });
+  assert.equal(response.status, 202);
+  await new Promise((resolve) => setTimeout(resolve, 50));
+  assert.deepEqual(calls, ['abort', 'shutdown'], 'Pi only quits once idle, so the task is stopped first');
+  // Pi settles the aborted run before exiting: that must not write the record back.
+  events.get('agent_settled')({}, ctx);
+  await new Promise((resolve) => setTimeout(resolve, 50));
+  await assert.rejects(readFile(join(stateDir, 'running', `${process.pid}.json`), 'utf8'));
+});
+
+test('stay-awake survives a /reload of the extension', async (t) => {
+  let active = false;
+  const enabled = [];
+  const wakeLock = { status: () => ({ active }), setEnabled: async (on) => { active = on; enabled.push(on); return { active }; }, close: async () => { active = false; } };
+  const h = harness('rpc', { wakeLock });
+  await h.events.get('session_start')({ reason: 'startup' }, h.ctx);
+  await wakeLock.setEnabled(true);
+  await h.events.get('session_shutdown')({ reason: 'reload' }, h.ctx);
+  assert.equal(active, false);
+  const replacement = harness('rpc', { wakeLock });
+  await replacement.events.get('session_start')({ reason: 'reload' }, replacement.ctx);
+  t.after(() => replacement.events.get('session_shutdown')({ reason: 'quit' }, replacement.ctx));
+  assert.equal(active, true, 'The replacement runtime takes the wake lock again');
+  assert.deepEqual(enabled, [true, true]);
 });

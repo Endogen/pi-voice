@@ -3,6 +3,7 @@ package com.pivoice.app;
 import android.Manifest;
 import android.app.Activity;
 import android.app.AlertDialog;
+import android.app.NotificationManager;
 import android.app.PendingIntent;
 import android.content.ClipData;
 import android.content.ComponentName;
@@ -55,7 +56,8 @@ public final class MainActivity extends Activity {
     private static final String PREFIX = "/data/data/com.termux/files/usr";
     private static final String ROOT = HOME + "/pi-voice";
     private static final String RUN_PERMISSION = "com.termux.permission.RUN_COMMAND";
-    private static final int COMMAND_PERMISSION = 10, MICROPHONE_PERMISSION = 11, FILE_PICKER = 12;
+    private static final int COMMAND_PERMISSION = 10, MICROPHONE_PERMISSION = 11, FILE_PICKER = 12, NOTIFICATION_PERMISSION = 13;
+    static final String EXTRA_PID = "com.pivoice.app.PID", EXTRA_OPEN_KEY = "com.pivoice.app.OPEN_KEY";
     private static WeakReference<MainActivity> active = new WeakReference<>(null);
     private final Handler handler = new Handler(Looper.getMainLooper());
     private FrameLayout root;
@@ -72,12 +74,20 @@ public final class MainActivity extends Activity {
     private SpeechRecognizer recognizer;
     private String speechId, speechLanguage;
     private ReplySpeaker replySpeaker;
+    private int openPid;
+
+    /** True while the chat is on screen; the page then handles reply alerts itself. */
+    static boolean inForeground() {
+        MainActivity activity = active.get();
+        return activity != null && activity.resumed && !activity.destroyed;
+    }
 
     @Override public void onCreate(Bundle state) {
         super.onCreate(state);
         active = new WeakReference<>(this);
         getWindow().setSoftInputMode(WindowManager.LayoutParams.SOFT_INPUT_ADJUST_RESIZE);
         createViews();
+        takeOpenRequest(getIntent());
         connect();
     }
 
@@ -85,7 +95,21 @@ public final class MainActivity extends Activity {
         super.onNewIntent(intent);
         setIntent(intent);
         // Never consume commands, paths, URLs or credentials from exported input.
+        // The only extra honoured is a session to show, from our own notification.
+        takeOpenRequest(intent);
         connect();
+    }
+
+    private void takeOpenRequest(Intent intent) {
+        int pid = intent == null ? 0 : intent.getIntExtra(EXTRA_PID, 0);
+        String key = intent == null ? null : intent.getStringExtra(EXTRA_OPEN_KEY);
+        openPid = pid > 0 && key != null && key.equals(Prefs.openKey(this)) ? pid : 0;
+    }
+
+    private void openRequestedSession() {
+        if (openPid <= 0 || !trustedPage()) return;
+        int pid = openPid; openPid = 0;
+        web.evaluateJavascript("window.__piVoiceOpenSession && window.__piVoiceOpenSession(" + pid + ")", null);
     }
 
     private int dp(int value) { return Math.round(value * getResources().getDisplayMetrics().density); }
@@ -241,7 +265,9 @@ public final class MainActivity extends Activity {
             if (!"http".equals(parsed.getScheme()) || !"127.0.0.1".equals(parsed.getHost()) || parsed.getPort() < 1 || parsed.getPort() > 65535 || parsed.getUserInfo() != null || !"/".equals(parsed.getRawPath()) || parsed.getRawQuery() != null || parsed.getRawFragment() == null || !parsed.getRawFragment().matches("[a-f0-9]{64}")) throw new IllegalArgumentException();
             String origin = "http://127.0.0.1:" + parsed.getPort();
             if (!url.equals(origin + "/#" + parsed.getRawFragment())) throw new IllegalArgumentException();
-            if (url.equals(activity.connectionUrl) && activity.pageReady) { activity.panel.setVisibility(View.GONE); return; }
+            // Lets signed reply broadcasts be verified while the app is closed.
+            Prefs.get(activity).edit().putString(Prefs.TOKEN, parsed.getRawFragment()).apply();
+            if (url.equals(activity.connectionUrl) && activity.pageReady) { activity.panel.setVisibility(View.GONE); activity.openRequestedSession(); return; }
             activity.origin = origin; activity.connectionUrl = url; activity.pageReady = false; activity.loadFailed = false;
             activity.loading("Opening your local chat…");
             activity.web.loadUrl(url);
@@ -285,6 +311,7 @@ public final class MainActivity extends Activity {
         @Override public void onPageFinished(WebView view, String url) {
             if (!destroyed && !loadFailed && trusted(Uri.parse(url)) && "/".equals(Uri.parse(url).getPath())) {
                 pageReady = true; panel.setVisibility(View.GONE);
+                openRequestedSession();
             }
         }
         @Override public void onReceivedError(WebView view, WebResourceRequest request, WebResourceError error) {
@@ -341,8 +368,9 @@ public final class MainActivity extends Activity {
     }
 
     // Intentionally no command, URL, token, filesystem or navigation methods.
-    // JavaScript gets native speech and two fixed actions: restart Pi through
-    // the normal connection routine, and show Pi's terminal.
+    // JavaScript gets native speech, haptics, reply-alert preferences and two
+    // fixed actions: restart Pi through the normal connection routine, and show
+    // Pi's terminal.
     public final class SpeechBridge {
         @JavascriptInterface public void speakText(String id, String text, String language) {
             if (id == null || !id.matches("[a-fA-F0-9-]{36}")) return;
@@ -379,6 +407,27 @@ public final class MainActivity extends Activity {
         }
         @JavascriptInterface public void abortSpeech(String id) {
             handler.post(() -> { if (trustedPage() && id != null && id.equals(speechId)) cancelSpeech("aborted"); });
+        }
+        @JavascriptInterface public void haptic(String kind) {
+            final int constant = Haptics.constant(kind, Build.VERSION.SDK_INT);
+            if (constant < 0) return;
+            // Follows Android's touch-feedback setting; needs no permission.
+            handler.post(() -> { if (trustedPage() && resumed) web.performHapticFeedback(constant); });
+        }
+        @JavascriptInterface public void setReplyAlerts(boolean notify, boolean sound, boolean ask) {
+            Prefs.get(MainActivity.this).edit().putBoolean(Prefs.NOTIFY, notify).putBoolean(Prefs.SOUND, sound).apply();
+            if (!notify || !ask || Build.VERSION.SDK_INT < 33) return;
+            handler.post(() -> {
+                if (trustedPage() && resumed && checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED) {
+                    requestPermissions(new String[]{Manifest.permission.POST_NOTIFICATIONS}, NOTIFICATION_PERMISSION);
+                }
+            });
+        }
+        @JavascriptInterface public String replyAlertStatus() {
+            NotificationManager manager = getSystemService(NotificationManager.class);
+            boolean allowed = manager != null && manager.areNotificationsEnabled()
+                && (Build.VERSION.SDK_INT < 33 || checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) == PackageManager.PERMISSION_GRANTED);
+            return allowed ? "on" : "off";
         }
         @JavascriptInterface public void reconnect() {
             // Same as tapping the app icon: start or resume Pi via Termux. No
@@ -485,12 +534,17 @@ public final class MainActivity extends Activity {
             else showError("Allow ‘Run commands in Termux’ in this app’s permissions, then tap Try again. This is a broad permission; grant it only to an app you trust.");
         } else if (request == MICROPHONE_PERMISSION) {
             if (granted) beginSpeech(); else cancelSpeech("not-allowed");
+        } else if (request == NOTIFICATION_PERMISSION && trustedPage()) {
+            web.evaluateJavascript("window.__piVoiceAlerts && window.__piVoiceAlerts()", null);
         }
     }
 
     @Override protected void onResume() {
         super.onResume();
         resumed = true; web.onResume(); web.resumeTimers();
+        // Opening the app shows the replies; their notifications are done.
+        NotificationManager notifications = getSystemService(NotificationManager.class);
+        if (notifications != null) notifications.cancelAll();
         // Permission results can arrive before the Activity regains foreground.
         if (speechId != null && recognizer == null && checkSelfPermission(Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED) beginSpeech();
     }

@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { mkdtemp, mkdir, readdir, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { removeRecord, stoppedRecords, writeRecord } from '../running.mjs';
+import { alive, removeRecord, stoppedRecords, writeRecord } from '../running.mjs';
 import { launchPlan } from '../native/host.mjs';
 
 async function fixture(t) {
@@ -58,4 +58,13 @@ test('the native host resumes the latest stopped main session in its folder, els
   assert.deepEqual([plan.cwd, plan.args], [h.project, ['--session', newer]]);
   assert.deepEqual(plan.stale.map((record) => record.pid), [22, 21], 'Parallel sessions are left for the app to offer');
   assert.deepEqual((await launchPlan({ directory: h.directory, args: ['--offline'], isAlive })).args, ['--offline'], 'Explicit arguments win');
+});
+
+test('a PID now owned by another app or a newer process does not count as our Pi', async () => {
+  assert.equal(await alive(process.pid), true);
+  assert.equal(await alive(1), false, 'EPERM: another user owns PID 1, so it is not a Pi we started');
+  assert.equal(await alive(2147480002), false);
+  // Linux/Android: a recorded start identity that no longer matches means reuse.
+  const { processIdentity } = await import('../wake-lock.mjs');
+  if (await processIdentity(process.pid)) assert.equal(await alive(process.pid, { identity: 'other-boot:1' }), false);
 });

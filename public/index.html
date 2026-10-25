@@ -109,6 +109,15 @@
         <input id="read-language" type="text" value="en-US" maxlength="35" placeholder="en-US, de-DE, …" autocapitalize="off" spellcheck="false">
         <p class="hint">Uses Android text-to-speech. Install a voice in Android’s text-to-speech settings if needed. Your selected speech provider may process the reply online. Code blocks are skipped; the text remains visible. Playback stops when you leave the app, start speaking or switch replies.</p>
       </section>
+      <section class="settings-section" aria-label="Replies and feedback">
+        <h3>Replies &amp; feedback</h3>
+        <label class="switch"><span>Notify when Pi replies</span><input type="checkbox" id="notify" role="switch" checked></label>
+        <p id="notify-status" class="hint">Shows a notification when a reply finishes while Pi Voice is in the background. Tap it to open that session.</p>
+        <label class="switch"><span>Sound when Pi replies</span><input type="checkbox" id="sound" role="switch" checked></label>
+        <p class="hint">A short chime while the app is open. Reply notifications use Android’s notification sound, which you can change in Android’s settings for Pi Voice.</p>
+        <label class="switch"><span>Haptic feedback</span><input type="checkbox" id="haptics" role="switch" checked></label>
+        <p class="hint">Light vibrations when recording, sending, refreshing and when a reply arrives. Follows Android’s touch-vibration setting.</p>
+      </section>
       <section class="settings-section" aria-label="Background operation">
         <h3>Keep Pi available</h3>
         <label class="switch"><span>Keep Termux awake</span><input type="checkbox" id="awake" role="switch" checked></label>
