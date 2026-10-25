@@ -58,7 +58,7 @@ cd ~/pi-voice
 npm run setup
 ```
 
-`npm run setup` registers the extension with Pi (`~/.pi/agent/extensions/pi-voice.ts`). It refuses to overwrite unrelated files, and it doesn't install Pi, change credentials or request Android permissions. No `npm install` is needed: the interface, artwork and Markdown parser are included. Keep the checkout in place.
+`npm run setup` registers the extension with Pi (`~/.pi/agent/extensions/pi-voice.ts`). It refuses to overwrite unrelated files, and it doesn't install Pi, change credentials or request Android permissions. No `npm install` is needed to run Pi Voice: the interface, artwork and Markdown parser are included. Keep the checkout in place.
 
 **2. Get the app.** Either download `pi-voice.apk` and `pi-voice.apk.sha256` from [Releases](https://github.com/Endogen/pi-voice/releases) into `~/pi-voice/native/out/` and check them with `sha256sum -c pi-voice.apk.sha256` in that folder, or [build it yourself](native/README.md#build-on-termux) with `npm run build:native`.
 
@@ -173,11 +173,13 @@ Notifications come from the Pi extension in Termux, which tells the app when a r
 
 ## Keeping Pi running
 
-Pi Voice asks Termux for a **CPU wake lock** while a voice-enabled Pi runs (**Settings → Keep Termux awake**, on by default). The screen can still turn off.
+Pi Voice asks Termux for a **CPU wake lock** while a voice-enabled Pi runs (**Settings → Keep Termux awake**, on by default). The screen can still turn off. The backend saves this preference for future starts, acquires the lock without waiting for the page, and reasserts it before each task. Existing other workers keep their own leases; `/voice sleep` remains a per-worker override.
 
 - A wake lock does not stop Android from killing Termux. Also set **Android Settings → Apps → Termux → Battery → Unrestricted**, keep Termux's notification enabled and, on some phones, allow autostart or background activity.
 - All Termux sessions share one Android wake lock. Several Pi Voice sessions coordinate through private lease files. Releasing the last one can also release a lock you acquired manually with `termux-wake-lock`.
 - In Pi, `/voice sleep` turns it off for that session and `/voice awake` turns it on. If Pi crashes while holding it, run `termux-wake-unlock`.
+
+A disappearing “Thinking” indicator does not prove the process was killed: a provider request may have failed while networking was suspended. Failed and aborted replies now show their reason, including failures with no reply text. Use `npm run diagnose --silent` before and after an interruption to compare process identities without exposing conversation content. See [background operation and OnePlus diagnosis](docs/background-operation.md) for separate sleep/network restrictions and device tests.
 
 ## Updating
 
@@ -251,8 +253,9 @@ To rotate the token, quit all Pi instances and stop the Pi Voice service, then d
 | `running.mjs` | Records which conversations are open, for restoring them after Pi stops. |
 | `activity.mjs` | Bounded in-memory log of Pi's current task. |
 | `notify.mjs` | Signed "Pi replied" broadcasts to the app for notifications. |
-| `image-attachments.mjs`, `wake-lock.mjs` | Upload validation and limits; Termux wake-lock leases. |
-| `src/` | Interface logic and the safe Markdown renderer. `npm run build` bundles it into `public/app.js`. |
+| `image-attachments.mjs`, `wake-lock.mjs`, `wake-settings.mjs` | Upload validation and limits; Termux wake-lock leases and saved preference. |
+| `diagnostics.mjs` | Read-only process/task report for screen-off interruptions. |
+| `src/` | Interface logic, separate session/polling controllers and the safe Markdown renderer. `npm run build` bundles it into `public/app.js`. |
 | `public/` | The page served to the app: HTML, CSS, icons and the generated bundle. |
 | `artwork/` | Original opaque Android launcher icon, approved transparent logo master and generation prompts. Transparent `public/` exports preserve the logo's framing for loading/in-app use (512px) and the app favicon (192px); `docs/assets/favicon-*.png` crop excess padding for small browser tabs. |
 | `native/` | Android app, background host and installer; see [native/README.md](native/README.md). |
@@ -262,6 +265,8 @@ To rotate the token, quit all Pi instances and stop the Pi Voice service, then d
 ```sh
 npm run build              # Rebuild public/app.js after changing src/
 npm test                   # Unit, HTTP and interface tests (+ bundle freshness)
+npm run test:browser       # Real Chromium UI (developer setup below)
+npm run diagnose           # Read-only process/task/wake-lock report
 npm run test:integration   # Real Pi in isolated RPC mode; no model requests
 npm run test:native        # Real Pi in a tmux PTY via the native host (Termux)
 npm run test:native:policy # Java checks: request boundary and terminal targets (JDK)
@@ -270,5 +275,9 @@ npm run build:native       # Build and sign the APK (Termux; see native/README.m
 ```
 
 The terminal integration also accepts `PI_VOICE_TEST_PI` and `PI_VOICE_TEST_TMUX` for isolated desktop testing. For a Pi installed elsewhere: `PI_VOICE_TEST_PI=/path/to/pi PI_VOICE_TEST_EXTENSION="$PWD/extension.mjs" npm run test:integration`.
+
+Pushes and pull requests run the bundle check and Node tests on Node 22.19 and 24, the executable Java policy and speech checks, and real-browser tests. The real-Pi integration commands remain separate and require a local Pi installation.
+
+Browser-test development only: run `npm ci` and `npx playwright install chromium` once, then `npm run test:browser`. Playwright is a pinned development dependency; normal Termux installation and runtime still require no npm dependencies. Tests use an isolated mock Pi backend behind the production HTTP boundary, with desktop and phone-sized Chromium. Failed CI runs retain screenshots and traces. Phone-sized Chromium is not an Android emulator.
 
 Automated tests cover the interface logic, HTTP behavior, real Pi integration and the native app's Java security checks. Model-switch regressions include secret-free registry metadata, stale targets, concurrent controls, rejected/lost acknowledgements, preserved drafts/images/history and process isolation. Both real-Pi integrations use an isolated unreachable test provider and consume prompts before inference; they validate selection and capabilities, not real-provider availability or model quality. Anything that needs a real phone has to be checked there: speech recognition, text-to-speech, the image picker, Termux tab creation, and how long a given vendor lets Pi run in the background.

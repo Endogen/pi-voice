@@ -13,6 +13,7 @@
     let operation;
     let uncertain;
     let accepted;
+    let acceptedState;
     let loadFailed = false;
     let message = '';
     let error = false;
@@ -69,7 +70,7 @@
       const capture = target();
       if (capture.key !== identity) {
         identity = capture.key; currentKey = undefined; data = undefined; chosen = undefined;
-        loading = undefined; operation = undefined; uncertain = undefined; accepted = undefined; loadFailed = false; setMessage('');
+        loading = undefined; operation = undefined; uncertain = undefined; accepted = undefined; acceptedState = undefined; loadFailed = false; setMessage('');
         $('model-filter').value = ''; renderChoices();
       }
       const next = keyOf(state()?.modelSelection);
@@ -83,9 +84,13 @@
         setMessage('Model change not confirmed. Pi is no longer changing models; check the displayed active model before retrying.', true);
         uncertain = undefined;
       }
-      if (accepted && (next === keyOf(accepted) || next !== currentKey)) {
+      // Termux may switch back to the original model before we observe the
+      // accepted choice. A later idle snapshot must still release the controls.
+      if (accepted && (next === keyOf(accepted) || next !== currentKey
+        || (!operation && state() !== acceptedState && state()?.modelSwitchingSupported && !state().modelSwitching))) {
         setMessage(next === keyOf(accepted) ? `Using ${labelOf(accepted)} for this session.` : 'Pi’s model changed again. Check the displayed active model before continuing.', next !== keyOf(accepted));
         accepted = undefined;
+        acceptedState = undefined;
       }
       if (next !== currentKey) {
         currentKey = next; chosen = state()?.modelSelection;
@@ -131,7 +136,7 @@
       if (model.contextWindow && (model.contextWindow < previous?.contextWindow || data.contextTokens >= model.contextWindow)) warnings.push(`This model has a ${model.contextWindow.toLocaleString()} token context${data.contextTokens !== null ? `; the last estimate was ${data.contextTokens.toLocaleString()} tokens` : ''}. Pi may need to compact the conversation. Consider a new session for a much smaller model.`);
       if (hasImages() && !model.input?.includes('image')) warnings.push('Your unsent images will be kept, but this model cannot receive them. Remove them or choose an image-capable model before sending.');
       if (!confirm(warnings.join('\n\n')) || !isCurrent(capture) || blockedReason()) return;
-      operation = capture; uncertain = undefined; accepted = undefined; setMessage(''); changed(); render();
+      operation = capture; uncertain = undefined; accepted = undefined; acceptedState = undefined; setMessage(''); changed(); render();
       try {
         await request('model', { method: 'POST', handle: capture.handle, body: { sessionId: capture.sessionId, provider: model.provider, id: model.id, expectedModel: current } });
         if (!isCurrent(capture) || operation !== capture) return;
@@ -139,6 +144,7 @@
         if (!isCurrent(capture) || operation !== capture) return;
         const confirmed = keyOf(state()?.modelSelection) === keyOf(model);
         accepted = confirmed ? undefined : model;
+        acceptedState = confirmed ? undefined : state();
         setMessage(confirmed ? `Using ${labelOf(model)} for this session.` : 'Change accepted. Waiting for Pi’s state to confirm the active model.');
         notify(message);
       } catch (failure) {

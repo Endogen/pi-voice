@@ -23,6 +23,8 @@ sessions/
 
 # Dependencies/caches (runtime has no npm dependencies)
 node_modules/
+test-results/
+playwright-report/
 .cache/
 __pycache__/
 *.pyc

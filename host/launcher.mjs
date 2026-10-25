@@ -18,7 +18,7 @@ export function createLauncher({ socket = 'pi-voice-native', pi = join(homedir()
     },
     async launch(entry) {
       if (await this.present(entry)) return;
-      const vars = { PI_VOICE_MANAGED_ID: entry.handle, PI_VOICE_INSTANCE_ID: entry.instanceId, PI_VOICE_OPERATION_ID: entry.operationId,
+      const vars = { PI_VOICE_MANAGED_ID: entry.handle, PI_VOICE_INSTANCE_ID: entry.instanceId,
         ...(env.PI_CODING_AGENT_DIR ? { PI_CODING_AGENT_DIR: env.PI_CODING_AGENT_DIR } : {}) };
       await command('new-session', '-d', '-s', entry.terminal, '-x', '100', '-y', '36', '-c', entry.cwd,
         ...Object.entries(vars).flatMap(([key, value]) => ['-e', `${key}=${value}`]), pi, ...args,

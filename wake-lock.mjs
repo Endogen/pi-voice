@@ -74,9 +74,9 @@ export function createWakeLock({ directory, pid = process.pid, run = runTermux, 
     }
     return others;
   }
-  function setEnabled(enabled) {
+  function setEnabled(enabled, { refresh = false } = {}) {
     const operation = async () => {
-      if (enabled === active) { error = null; return status(); }
+      if (enabled === active && !(enabled && refresh)) { error = null; return status(); }
       try {
         return await withGuard(async () => {
           const others = await otherSessions();

@@ -99,7 +99,7 @@ export function createSessionManager({ directory, registry, launcher, client, cw
         } else if (now() - entry.closeIntent.at > closeTimeout) {
           entry.status = 'close-error'; entry.error = 'Pi has not exited. Review it in Termux or retry Close.';
         }
-      } else if (active(entry) || entry.status === 'incompatible') {
+      } else if (active(entry)) {
         entry.status = processLive || terminalLive ? 'unavailable' : 'stopped';
       }
     }
@@ -201,7 +201,7 @@ export function createSessionManager({ directory, registry, launcher, client, cw
     }),
     snapshot: () => serial(async () => {
       await reconcile();
-      return { selected: data.selected, sessions: entries().filter((e) => active(e) || e.status === 'incompatible').map(publicEntry),
+      return { selected: data.selected, sessions: entries().filter(active).map(publicEntry),
         stopped: await Promise.all(entries().filter((e) => ['stopped', 'failed'].includes(e.status)).map(async (e) => ({ ...publicEntry(e), restorable: Boolean(await resumable(e)) }))) };
     }),
     target: (handle) => serial(async () => {

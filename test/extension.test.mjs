@@ -37,7 +37,7 @@ function harness(mode = 'rpc', options = {}) {
     registerFlag() {}, getFlag: () => false,
     registerCommand: (name, command) => commands.set(name, command),
     sendUserMessage: (text, options) => { sent.push({ text, options }); },
-  }, options);
+  }, { wakeSettings: { load: async () => false, save: async () => {} }, ...options });
   return { events, commands, ctx, branch, sent, busy: (value) => { busy = value; }, aborts: () => aborts, shutdowns: () => shutdowns };
 }
 async function endpoint() {
@@ -304,12 +304,13 @@ test('print mode loads the extension without opening a socket or endpoint', asyn
 test('extension exposes wake-lock state, responds to app controls and releases it on shutdown', async (t) => {
   let active = false;
   const calls = [];
+  const saved = [];
   const wakeLock = {
     status: () => ({ active, error: null }),
     setEnabled: async (enabled) => { active = enabled; calls.push(enabled); return { active, error: null }; },
     close: async () => { calls.push('close'); active = false; },
   };
-  const h = harness('rpc', { wakeLock });
+  const h = harness('rpc', { wakeLock, wakeSettings: { load: async () => false, save: async (enabled) => saved.push(enabled) } });
   await h.events.get('session_start')({ reason: 'startup' }, h.ctx);
   t.after(() => h.events.get('session_shutdown')({ reason: 'quit' }, h.ctx));
   const ep = await endpoint();
@@ -329,6 +330,7 @@ test('extension exposes wake-lock state, responds to app controls and releases i
   await h.events.get('session_shutdown')({ reason: 'reload' }, h.ctx);
   assert.equal(active, false);
   assert.deepEqual(calls, [true, false, true, false, true, 'close']);
+  assert.deepEqual(saved, [false, true, true], 'Only app settings persist the default; terminal commands affect this worker');
   assert.deepEqual(await readdir(join(stateDir, 'endpoints')), []);
 });
 
@@ -409,7 +411,7 @@ test('stay-awake survives a /reload of the extension', async (t) => {
   const wakeLock = { status: () => ({ active }), setEnabled: async (on) => { active = on; enabled.push(on); return { active }; }, close: async () => { active = false; } };
   const h = harness('rpc', { wakeLock });
   await h.events.get('session_start')({ reason: 'startup' }, h.ctx);
-  await wakeLock.setEnabled(true);
+  await h.commands.get('voice').handler('awake', h.ctx);
   await h.events.get('session_shutdown')({ reason: 'reload' }, h.ctx);
   assert.equal(active, false);
   const replacement = harness('rpc', { wakeLock });
@@ -417,4 +419,44 @@ test('stay-awake survives a /reload of the extension', async (t) => {
   t.after(() => replacement.events.get('session_shutdown')({ reason: 'quit' }, replacement.ctx));
   assert.equal(active, true, 'The replacement runtime takes the wake lock again');
   assert.deepEqual(enabled, [true, true]);
+});
+
+test('cold workers restore saved wake preference without a page, retry before work, and respect sleep', async (t) => {
+  for (const enabled of [true, false]) {
+    const calls = [];
+    let active = false, failed = enabled;
+    const wakeLock = { status: () => ({ active }), close: async () => { active = false; },
+      setEnabled: async (on, options) => {
+        calls.push({ on, refresh: options?.refresh });
+        if (failed) { failed = false; throw new Error('Temporary Termux service failure'); }
+        active = on; return { active };
+      } };
+    const h = harness('rpc', { wakeLock, wakeSettings: { load: async () => enabled, save: async () => {} } });
+    await h.events.get('session_start')({ reason: 'startup' }, h.ctx);
+    await h.events.get('agent_start')({}, h.ctx);
+    assert.equal(active, enabled);
+    assert.deepEqual(calls, enabled ? [{ on: true, refresh: undefined }, { on: true, refresh: true }] : []);
+    await h.commands.get('voice').handler('sleep', h.ctx);
+    const before = calls.length;
+    await h.events.get('agent_start')({}, h.ctx);
+    assert.equal(calls.length, before, 'A per-worker sleep override is not undone by the next task');
+    await h.events.get('session_shutdown')({ reason: 'quit' }, h.ctx);
+  }
+});
+
+test('empty failed and aborted replies remain visible with a bounded reason and no success alert', async (t) => {
+  const alerts = [];
+  const h = harness('rpc', { alert: (value) => alerts.push(value) });
+  await h.events.get('session_start')({ reason: 'startup' }, h.ctx);
+  t.after(() => h.events.get('session_shutdown')({ reason: 'quit' }, h.ctx));
+  const ep = await endpoint();
+  for (const stopReason of ['error', 'aborted']) {
+    await h.events.get('agent_start')({}, h.ctx);
+    h.branch.push({ type: 'message', id: `failure-${stopReason}`, message: { role: 'assistant', content: [], stopReason, errorMessage: 'Network timeout '.repeat(100) } });
+    await h.events.get('agent_settled')({}, h.ctx);
+    const state = await (await fetch(`${ep.origin}/api/state`, { headers: { Authorization: `Bearer ${ep.token}` } })).json();
+    assert.equal(state.messages.at(-1).stopReason, stopReason);
+    assert.ok((state.messages.at(-1).error || '').length <= 1000);
+    assert.equal(alerts.length, 0);
+  }
 });

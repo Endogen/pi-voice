@@ -38,6 +38,12 @@ Do not silently change providers, drop draft images, replace the conversation, p
 
 ## Quality constraints
 
+`src/sessions.js` owns session selection, launch/restore/close actions, notification routing, session-list polling and its sheet. Its state and injected UI callbacks make lifecycle changes explicit. `src/polling.js` serializes state requests, rejects stale session generations and guarantees a fresh request after model mutations; `src/app.js` applies current state to the conversation. The browser bundle remains a local script with no runtime npm dependencies.
+
+Node VM tests cover detailed state transitions; Playwright exercises the actual HTML, CSS, native select/dialog behavior, image decoding and request races through the production authenticated HTTP boundary. Chromium's phone viewport emulates layout and touch, not Android power management or native speech.
+
+Failed assistant attempts are retained, including empty replies and partial text. Show their error and let users decide how to continue; while Pi is still retrying, show that it is working. Never invent a successful reply or replay a prompt on reconnect.
+
 - Safe-area insets, dynamic viewport units, mobile keyboard resize, minimum 44px touch controls.
 - Clear working, waiting, disconnected and listening states. Do not reveal private model reasoning.
 - Reduced-motion preference gets a static visible indicator rather than no indicator.

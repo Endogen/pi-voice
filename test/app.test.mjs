@@ -604,7 +604,7 @@ for (const working of ['busy', 'pending']) test(`New while Pi is ${working} star
   assert.equal(h.requests.at(-1).handle, 'session-200', 'Later requests go to the new Pi through the independent host');
   assert.equal(h.el('session-title').textContent, 'New session');
   assert.match(h.el('notice').textContent, /previous one keeps running/);
-  assert.equal(vm.runInContext('targetHandle', h.context), 'session-200');
+  assert.equal(vm.runInContext('sessionState.targetHandle', h.context), 'session-200');
   h.el('draft').value = 'question for the new session';
   await vm.runInContext('send()', h.context);
   assert.equal(h.prompts.at(-1).sessionId, 'session-two');
@@ -613,7 +613,7 @@ for (const working of ['busy', 'pending']) test(`New while Pi is ${working} star
   assert.equal(h.el('session-list').children.length, 2);
   h.el('session-list').children[0].children[0].click();
   await flush();
-  assert.equal(vm.runInContext('targetHandle', h.context), 'session-100');
+  assert.equal(vm.runInContext('sessionState.targetHandle', h.context), 'session-100');
   assert.equal(h.state[working], true, 'The first task is still running, with no reply needed to switch');
   assert.equal(h.el('thinking').hidden, false);
   assert.equal(h.el('new-session').disabled, false);
@@ -621,7 +621,7 @@ for (const working of ['busy', 'pending']) test(`New while Pi is ${working} star
   assert.equal(h.el('session-list').children.length, 2, 'Both sessions remain in the list');
   h.el('session-list').children[1].children[0].click();
   await flush();
-  assert.equal(vm.runInContext('targetHandle', h.context), 'session-200');
+  assert.equal(vm.runInContext('sessionState.targetHandle', h.context), 'session-200');
 });
 
 test('a background session that finishes is flagged, and switching back clears the flag', async () => {
@@ -706,7 +706,7 @@ test('New discovers the spawned Pi after a lost acknowledgement without launchin
   await flush();
   assert.equal(h.el('draft').value, 'keep on success too');
   assert.equal(h.el('new-session').disabled, false);
-  assert.equal(vm.runInContext('targetHandle', h.context), 'session-200');
+  assert.equal(vm.runInContext('sessionState.targetHandle', h.context), 'session-200');
   assert.equal(h.requests.filter((r) => r.path === '/api/session/spawn').length, 1);
 });
 
@@ -714,7 +714,7 @@ test('New session timeout never clears an unconfirmed draft', async () => {
   const h = await setup();
   h.el('draft').value = 'still here';
   await vm.runInContext('startNewSession()', h.context);
-  await vm.runInContext('spawnRequest.deadline = 0; pollSessions()', h.context);
+  await vm.runInContext('sessionState.spawnRequest.deadline = 0; pollSessions()', h.context);
   assert.match(h.el('notice').textContent, /did not start in time/);
   assert.equal(h.el('draft').value, 'still here');
   assert.equal(h.el('new-session').disabled, false);
@@ -1251,7 +1251,7 @@ test('switching sessions retargets Open in Termux and ignores late activity from
   const previousActivity = vm.runInContext('pollActivity()', h.context);
   let finishState;
   h.network.state = (handle) => handle === 'session-200' ? new Promise((resolve) => { finishState = resolve; }) : Response.json(h.state);
-  vm.runInContext("switchTo('session-200')", h.context);
+  vm.runInContext("sessionsController.switchTo('session-200')", h.context);
   assert.equal(h.el('open-terminal').disabled, true, 'Cannot attach the old terminal during a switch');
   h.el('open-terminal').click();
   assert.equal(h.nativeCalls.some((call) => call.method === 'terminal'), false);
@@ -1261,7 +1261,7 @@ test('switching sessions retargets Open in Termux and ignores late activity from
   await previousActivity;
   h.el('open-terminal').click();
   assert.equal(h.nativeCalls.at(-1).session, 'pi-voice-abcdef12');
-  vm.runInContext("switchTo('session-100')", h.context);
+  vm.runInContext("sessionsController.switchTo('session-100')", h.context);
   await flush();
   h.el('open-terminal').click();
   assert.equal(h.nativeCalls.at(-1).session, 'pi-voice');
@@ -1276,7 +1276,7 @@ test('late failed state/activity polls cannot disconnect the newly selected sess
   const previousState = vm.runInContext('poll()', h.context);
   const previousActivity = vm.runInContext('pollActivity()', h.context);
   h.network.state = () => Response.json({ ...h.state, handle: 'session-200', instanceId: 'instance-200', status: 'ready', capabilities: { close: true }, sessionId: 'session-two', terminal: { session: 'pi-voice-abcdef12' } });
-  vm.runInContext("switchTo('session-200')", h.context);
+  vm.runInContext("sessionsController.switchTo('session-200')", h.context);
   failState(new TypeError('Old session connection closed'));
   failActivity(Response.json({ error: 'Not found' }, { status: 404 }));
   await Promise.all([previousState, previousActivity]);
@@ -1501,14 +1501,14 @@ test('a notification waits for image preparation and keeps the prepared attachme
 test('a queued notification wins after a new-session launch finishes', async () => {
   const h = await setup({ native: true });
   const next = notificationSession(h);
-  vm.runInContext("spawnRequest = { id: 'operation-1234', deadline: Date.now() + 45000 }; controls()", h.context);
+  vm.runInContext("sessionState.spawnRequest = { id: 'operation-1234', deadline: Date.now() + 45000 }; controls()", h.context);
   h.context.window.__piVoiceOpenSession(next.handle, next.sessionId);
   assert.equal(notificationCalls(h).length, 0);
   h.sessions.push({ handle: 'spawned-session', status: 'ready', operationId: 'operation-1234' });
   await vm.runInContext('pollSessions()', h.context);
   await flush(); await flush();
   assert.equal(vm.runInContext('state.sessionId', h.context), next.sessionId);
-  assert.equal(vm.runInContext('spawnRequest', h.context), undefined);
+  assert.equal(vm.runInContext('sessionState.spawnRequest', h.context), undefined);
 });
 
 test('a notification deferred during session startup is opened when startup settles', async () => {
@@ -1535,7 +1535,7 @@ test('a session-list response started before a notification cannot undo its expl
   assert.equal(vm.runInContext('state.sessionId', h.context), next.sessionId);
   list.resolve(Response.json({ sessions: h.sessions }));
   await listing;
-  assert.equal(vm.runInContext('targetHandle', h.context), next.handle);
+  assert.equal(vm.runInContext('sessionState.targetHandle', h.context), next.handle);
   assert.equal(vm.runInContext('state.sessionId', h.context), next.sessionId);
 });
 
@@ -1545,13 +1545,13 @@ for (const status of [410, 502]) test(`an unavailable notification (${status}) n
   h.context.window.__piVoiceOpenSession('session-300', 'conversation-three');
   await flush(); await flush();
   assert.equal(vm.runInContext('state', h.context), undefined, 'An unrelated old answer is not left on screen');
-  assert.equal(vm.runInContext('targetHandle', h.context), 'session-300');
+  assert.equal(vm.runInContext('sessionState.targetHandle', h.context), 'session-300');
   assert.equal(h.el('send').disabled, true);
   assert.match(h.el('notice').textContent, /notified conversation is unavailable/);
   await vm.runInContext('pollSessions(); poll()', h.context);
-  assert.equal(vm.runInContext('targetHandle', h.context), 'session-300', 'Missing from the list is not permission to show another Pi');
+  assert.equal(vm.runInContext('sessionState.targetHandle', h.context), 'session-300', 'Missing from the list is not permission to show another Pi');
   assert.equal(notificationCalls(h).length, 0, 'The native request is not acknowledged as shown');
-  vm.runInContext(`switchTo('${h.state.handle}')`, h.context);
+  vm.runInContext(`sessionsController.switchTo('${h.state.handle}')`, h.context);
   await flush(); await flush();
   assert.equal(vm.runInContext('state.handle', h.context), h.state.handle, 'Explicit manual selection can recover');
   assert.equal(notificationCalls(h).at(-1).opened, false);
@@ -1565,8 +1565,8 @@ test('a stopped notification target can still be discovered and explicitly resto
   h.stopped.push({ handle: 'session-300', restorable: true, title: 'Notified conversation' });
   await vm.runInContext('pollSessions()', h.context);
   assert.equal(h.el('restore-banner').hidden, false);
-  assert.equal(vm.runInContext('stopped[0].handle', h.context), 'session-300');
-  await vm.runInContext('restoreSession(stopped[0])', h.context);
+  assert.equal(vm.runInContext('sessionState.stopped[0].handle', h.context), 'session-300');
+  await vm.runInContext('sessionsController.restoreSession(sessionState.stopped[0])', h.context);
   const restore = h.requests.find((r) => r.path === '/api/session/restore');
   assert.equal(restore.body.handle, 'session-300');
   assert.equal(notificationCalls(h).at(-1).opened, false, 'Restore is an explicit action, not successful notification navigation yet');
@@ -1586,7 +1586,7 @@ test('a list fetched during notification loading cannot revert a successfully op
   list.resolve(Response.json({ sessions: h.sessions }));
   await listing;
   assert.equal(vm.runInContext('state.sessionId', h.context), next.sessionId);
-  assert.equal(vm.runInContext('targetHandle', h.context), next.handle);
+  assert.equal(vm.runInContext('sessionState.targetHandle', h.context), next.handle);
 });
 
 test('a notification for a replaced conversation is rejected before display or persistent selection', async () => {
@@ -1607,7 +1607,7 @@ test('after rejecting an old notification, the user can explicitly open the repl
   h.context.window.__piVoiceOpenSession(next.handle, 'original-conversation');
   await flush(); await flush();
   assert.equal(vm.runInContext('state', h.context), undefined);
-  vm.runInContext(`switchTo('${next.handle}')`, h.context);
+  vm.runInContext(`sessionsController.switchTo('${next.handle}')`, h.context);
   await flush(); await flush();
   assert.equal(vm.runInContext('state.sessionId', h.context), next.sessionId);
   assert.equal(notificationCalls(h).at(-1).opened, false, 'An explicit choice overrides rather than acknowledges the old notification');
@@ -1651,7 +1651,7 @@ test('a parallel session killed without cleanup reloads host selection instead o
   await vm.runInContext('selectTarget("session-200"); poll()', h.context);
   await flush();
   assert.equal(h.requests.at(-1).handle, undefined, 'Re-read the host selection');
-  assert.equal(vm.runInContext('targetHandle', h.context), 'session-100', 'The dead target is not remembered');
+  assert.equal(vm.runInContext('sessionState.targetHandle', h.context), 'session-100', 'The dead target is not remembered');
   assert.equal(h.el('connection').textContent, 'Ready · project');
 });
 
@@ -1659,11 +1659,11 @@ test('tapping the current session while another one loads switches back', async 
   const h = await setup();
   h.sessions.push({ handle: 'session-200', instanceId: 'instance-200', status: 'ready', capabilities: { close: true }, sessionId: 'two', title: 'Two', cwd: '/project', spawned: true });
   await vm.runInContext('pollSessions()', h.context);
-  vm.runInContext("switchTo('session-200')", h.context);
-  vm.runInContext("switchTo('session-100')", h.context);
+  vm.runInContext("sessionsController.switchTo('session-200')", h.context);
+  vm.runInContext("sessionsController.switchTo('session-100')", h.context);
   await flush();
   await flush();
-  assert.equal(vm.runInContext('targetHandle', h.context), 'session-100', 'The second tap wins');
+  assert.equal(vm.runInContext('sessionState.targetHandle', h.context), 'session-100', 'The second tap wins');
 });
 
 test('Restore joins a launch in flight and survives a lost acknowledgement', async () => {
@@ -1680,9 +1680,9 @@ test('Restore joins a launch in flight and survives a lost acknowledgement', asy
     if (path === '/api/session/restore') throw new TypeError('Network lost');
     return original(path, options);
   })(h.context.fetch);
-  await vm.runInContext(`restoreSession({ handle: 'restore-4321', restorable: true, title: 'Earlier' })`, h.context);
+  await vm.runInContext(`sessionsController.restoreSession({ handle: 'restore-4321', restorable: true, title: 'Earlier' })`, h.context);
   assert.match(h.el('notice').textContent, /Checking whether the session was restored/);
-  assert.ok(vm.runInContext('spawnRequest', h.context), 'Still watching for the launched Pi; no second POST');
+  assert.ok(vm.runInContext('sessionState.spawnRequest', h.context), 'Still watching for the launched Pi; no second POST');
 });
 
 test('empty host stays connected, permits New, and blocks prompt and speech without a session', async () => {
@@ -1709,7 +1709,7 @@ test('closing the selected first session keeps draft/images and displays Closing
   h.el('draft').value = 'my unsent draft';
   await attach(h);
   h.network.close = () => { h.sessions[0].status = 'closing'; h.sessions[0].capabilities.close = false; return Response.json({ status: 'closing' }, { status: 202 }); };
-  await vm.runInContext('closeSession(sessions[0])', h.context);
+  await vm.runInContext('sessionsController.closeSession(sessionState.sessions[0])', h.context);
   assert.equal(h.el('draft').value, 'my unsent draft');
   assert.equal(h.el('attachments').children.length, 1);
   assert.equal(h.sessions[0].status, 'closing');
@@ -1722,7 +1722,7 @@ test('native preference migration imports allowlisted settings without replacing
   assert.equal(h.el('language').value, 'de-DE');
   assert.equal(h.el('sound').checked, false);
   assert.equal(h.values.get('pi-voice-token'), 'test-token');
-  assert.equal(vm.runInContext('targetHandle', h.context), 'session-100');
+  assert.equal(vm.runInContext('sessionState.targetHandle', h.context), 'session-100');
 });
 
 async function openModels(h) {
@@ -1748,7 +1748,7 @@ test('model picker uses the registry, filters generically, and preserves drafts/
   assert.equal(request.handle, 'session-100');
   assert.deepEqual(request.body, { sessionId: 'session-one', provider: 'custom-local', id: 'qwen/model:Q5_K_M', expectedModel: { provider: 'test', id: 'test' } });
   assert.match(h.confirmations.at(-1), /existing conversation.*custom-local/);
-  assert.match(h.confirmations.at(-1), /4,096 token context/);
+  assert.ok(h.confirmations.at(-1).includes(`${(4096).toLocaleString()} token context`));
   assert.match(h.confirmations.at(-1), /unsent images will be kept/);
   assert.equal(h.el('draft').value, 'Keep this unsent question');
   assert.equal(h.el('attachments').children.length, 1);
@@ -1843,6 +1843,41 @@ test('state polls settle authentication that outlives a timed-out model request,
   }
 });
 
+test('a timed-out model change waits for a fresh state request before unlocking controls', async () => {
+  const h = await setup(); h.el('draft').value = 'Wait for authentication';
+  await openModels(h); chooseModel(h);
+  const oldState = Response.json(h.state);
+  let finishPoll;
+  h.network.state = () => new Promise((resolve) => { finishPoll = () => resolve(oldState); });
+  const pendingPoll = vm.runInContext('poll()', h.context);
+  h.network.model = async () => { h.state.modelSwitching = true; throw new Error('Timed out'); };
+  h.el('model-apply').click(); await flush(); await flush();
+  assert.equal(h.el('send').disabled, true, 'An older in-flight poll cannot resolve a model mutation');
+  h.network.state = () => Response.json(h.state);
+  finishPoll(); await pendingPoll; await flush(); await flush();
+  assert.equal(h.el('send').disabled, true, 'Authentication is still running in Pi');
+  assert.match(h.el('model-status').textContent, /still changing models|model change is in progress/);
+  assert.equal(h.requests.filter((entry) => entry.path === '/api/model').length, 1);
+  h.state.modelSwitching = false;
+  await vm.runInContext('poll()', h.context);
+  assert.equal(h.el('send').disabled, false);
+});
+
+test('a model changed back in Termux after acceptance does not leave the composer locked', async () => {
+  const h = await setup(); h.el('draft').value = 'Keep this draft';
+  await openModels(h); chooseModel(h);
+  // Pi accepted the choice, but the terminal restored the previous model
+  // before the browser could observe the intermediate selection.
+  h.network.model = () => Response.json({ ok: true });
+  h.el('model-apply').click(); await flush(); await flush();
+  await vm.runInContext('poll()', h.context);
+  assert.equal(h.el('send').disabled, false);
+  assert.equal(h.el('model-refresh').disabled, false);
+  assert.match(h.el('model-status').textContent, /changed again|no longer changing/);
+  assert.equal(h.el('draft').value, 'Keep this draft');
+  assert.equal(h.requests.filter((entry) => entry.path === '/api/model').length, 1);
+});
+
 test('provider rejection keeps the old model, releases controls and never silently falls back', async () => {
   const h = await setup(); h.el('draft').value = 'Keep me'; await openModels(h); chooseModel(h);
   h.network.model = () => Response.json({ error: 'Provider authentication unavailable' }, { status: 422 });
@@ -1897,4 +1932,26 @@ test('stale model lists and completed POSTs cannot overwrite or notify a newly s
     assert.equal(h.el('model-choice').value, JSON.stringify(['elsewhere', 'other']), type);
     assert.doesNotMatch(h.el('model-status').textContent, /Using custom-local|Change accepted|not confirmed/, type);
   }
+});
+
+test('failed replies retain partial output, show retry activity and do not play success feedback', async () => {
+  const h = await setup({ native: true });
+  h.state.busy = true;
+  h.state.messages = [
+    { id: 'question-failed', role: 'user', text: 'Do the work' },
+    { id: 'answer-failed', role: 'assistant', text: 'Partial progress', stopReason: 'error', error: 'Connection reset' },
+  ];
+  await vm.runInContext('poll()', h.context);
+  assert.match(h.el('latest-answer').innerHTML, /Partial progress/);
+  assert.match(h.el('latest-answer').innerHTML, /still working/);
+  assert.doesNotMatch(h.el('latest-answer').innerHTML, /send a message to continue/);
+  h.state.busy = false;
+  const before = h.feedback.length;
+  await vm.runInContext('poll()', h.context);
+  assert.match(h.el('latest-answer').innerHTML, /Connection reset/);
+  assert.equal(h.feedback.length, before, 'An error is not a successful reply chime/haptic');
+  assert.equal(h.prompts.length, 0, 'A failed turn is never automatically replayed');
+  h.state.messages.at(-1).stopReason = 'aborted';
+  await vm.runInContext('poll()', h.context);
+  assert.match(h.el('latest-answer').innerHTML, /task was stopped/);
 });

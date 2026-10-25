@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+- Extracted the session controller and polling coordinator from the main frontend. Added real Chromium tests at desktop and phone sizes for dialogs, image decoding, model/session races, notification navigation and failed replies; CI retains failure traces and screenshots.
+- Workers restore the saved app stay-awake preference at cold startup without waiting for the page, and reassert the Termux wake lock before each agent run. Disabled preferences and per-worker `/voice sleep` overrides are respected. This improves CPU wakefulness but cannot override Android/OEM network restrictions or process killing.
+- Failed or aborted assistant replies remain visible even when empty; the UI reports the error rather than silently returning to idle. Failures do not play success feedback or automatically replay work.
+- Added `npm run diagnose`, a read-only report of process identities, task state and wake-lock request status without credentials or conversation content. See `docs/background-operation.md` for Android/OnePlus diagnosis and device checks.
+
+- Fixed model-change timeouts reconciling against an older in-flight state poll, which could prematurely unlock the composer while Pi was still authenticating. Fresh state requests now wait for older polls to finish.
+- Fixed the composer remaining locked when a model change was accepted and then reverted in Termux before the app observed it. A later idle snapshot releases the controls and explains the changed selection.
+- Made model-picker tests locale-independent, removed unused worker operation environment data and redundant lifecycle/error helpers, and added automatic Node and Java checks for pushes and pull requests.
+
 - **Session-scoped model switching** under Settings → Connected Pi: filter configured models by name, provider or ID, review capabilities, and explicitly confirm a selection. Works with Pi's registry for local and cloud providers; no Qwen-specific paths, inference clients, runtime management or new dependencies.
 - Switches keep the conversation, unsent draft and images, other Pi processes and Pi's default unchanged. Confirmations warn about provider changes, smaller context windows and text-only models; images are not silently dropped and there is no automatic cloud fallback.
 - Explicit process/conversation/previous-model checks and a single-flight adapter reject stale or overlapping changes. The composer and related controls wait for confirmation; timeouts reconcile Pi's actual selection without replaying the request. Old backends show restart guidance.

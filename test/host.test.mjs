@@ -27,7 +27,7 @@ async function fixture(t) {
       if (await this.present(entry)) return;
       const child = spawn(process.execPath, [new URL('./fixtures/host-worker.mjs', import.meta.url).pathname], {
         env: { ...process.env, PI_CODING_AGENT_DIR: root, PI_VOICE_RPC: '1', PI_VOICE_MANAGED_ID: entry.handle,
-          PI_VOICE_INSTANCE_ID: entry.instanceId, PI_VOICE_OPERATION_ID: entry.operationId,
+          PI_VOICE_INSTANCE_ID: entry.instanceId,
           ...(entry.sessionFile ? { TEST_SESSION_ID: entry.sessionId, TEST_SESSION_FILE: entry.sessionFile } : {}) },
         stdio: ['ignore', 'ignore', 'pipe', 'ipc'],
       });

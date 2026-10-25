@@ -13,6 +13,8 @@ const parts = [
   await readFile(new URL('src/native-speech.js', root), 'utf8'),
   await readFile(new URL('src/playback.js', root), 'utf8'),
   await readFile(new URL('src/model-picker.js', root), 'utf8'),
+  await readFile(new URL('src/sessions.js', root), 'utf8'),
+  await readFile(new URL('src/polling.js', root), 'utf8'),
   await readFile(new URL('src/app.js', root), 'utf8'),
 ];
 // Concatenate into the already-served /app.js route: frontend changes need only

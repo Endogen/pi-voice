@@ -129,3 +129,15 @@ test('rapid enable/disable requests are serialized within a session', async (t) 
   assert.equal(session.status().active, true);
   await session.close();
 });
+
+test('starting work can reassert a lost Android lock without disturbing other leases', async (t) => {
+  const h = await setup(t);
+  const one = h.session(101), two = h.session(102);
+  await one.setEnabled(true); await two.setEnabled(true);
+  await one.setEnabled(true, { refresh: true });
+  assert.deepEqual(h.calls, ['termux-wake-lock', 'termux-wake-lock', 'termux-wake-lock']);
+  await one.close();
+  assert.equal(h.calls.includes('termux-wake-unlock'), false);
+  await two.close();
+  assert.equal(h.calls.at(-1), 'termux-wake-unlock');
+});

@@ -4,7 +4,10 @@
   "version": "3.0.0",
   "type": "module",
   "description": "Native Android voice app for the Pi coding agent running in Termux",
-  "repository": { "type": "git", "url": "https://github.com/Endogen/pi-voice.git" },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/Endogen/pi-voice.git"
+  },
   "homepage": "https://github.com/Endogen/pi-voice#readme",
   "bugs": "https://github.com/Endogen/pi-voice/issues",
   "scripts": {
@@ -12,6 +15,8 @@
     "build": "node build.mjs",
     "test": "node build.mjs --check && node --test test/*.test.mjs",
     "test:integration": "node test/integration.mjs",
+    "test:browser": "node build.mjs --check && playwright test",
+    "diagnose": "node diagnostics.mjs",
     "build:native": "node build.mjs && node native/build.mjs",
     "test:native": "node native/integration.mjs",
     "test:native:policy": "node native/test-policy.mjs",
@@ -19,5 +24,10 @@
     "native:setup": "node native/setup.mjs",
     "native:install": "node native/setup.mjs --install"
   },
-  "engines": { "node": ">=22.19" }
+  "engines": {
+    "node": ">=22.19"
+  },
+  "devDependencies": {
+    "@playwright/test": "1.64.1"
+  }
 }

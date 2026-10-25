@@ -1,3 +1,5 @@
+import { fail } from './transport.mjs';
+
 // Shared transport limits; build.mjs also embeds these in the browser bundle.
 export const imageLimits = Object.freeze({
   maxCount: 4,
@@ -8,7 +10,6 @@ export const imageLimits = Object.freeze({
   maxEdge: 2048,
   maxPixels: 40_000_000,
 });
-const fail = (status, message) => Object.assign(new Error(message), { status });
 
 // This checks the transport envelope and file signature, not a full image decode.
 // The browser decodes/re-encodes selections; Pi performs its own image processing.

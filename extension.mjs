@@ -11,6 +11,8 @@ import { writeRecord } from './running.mjs';
 import { stateDir, loadToken, protocolVersion, validId } from './config.mjs';
 import { atomicJSON } from './storage.mjs';
 import { createModelSelection, modelReference } from './models.mjs';
+import { fail } from './transport.mjs';
+import { createWakeSettings } from './wake-settings.mjs';
 export { stateDir } from './config.mjs';
 
 const readVersion = async (file) => {
@@ -65,14 +67,13 @@ export function createTerminal({ detect = detectTerminal, now = Date.now } = {})
 }
 
 const managedId = validId(process.env.PI_VOICE_MANAGED_ID) ? process.env.PI_VOICE_MANAGED_ID : undefined;
-const fail = (status, message) => Object.assign(new Error(message), { status });
 
 function textOf(message) {
   if (typeof message.content === 'string') return message.content;
   return (message.content || []).filter((part) => part.type === 'text').map((part) => part.text).join('\n');
 }
 
-export default function installVoiceExtension(pi, { wakeLock = createWakeLock({ directory: join(stateDir, 'wake-lock') }), getTerminal = createTerminal(), alert = sendReplyAlert } = {}) {
+export default function installVoiceExtension(pi, { wakeLock = createWakeLock({ directory: join(stateDir, 'wake-lock') }), wakeSettings = createWakeSettings(stateDir), getTerminal = createTerminal(), alert = sendReplyAlert } = {}) {
   let bridge;
   let instanceId = validId(process.env.PI_VOICE_INSTANCE_ID) ? process.env.PI_VOICE_INSTANCE_ID : randomUUID();
   let handle = managedId || `external-${process.pid}-${instanceId}`;
@@ -82,6 +83,7 @@ export default function installVoiceExtension(pi, { wakeLock = createWakeLock({ 
   let bridgeToken;
   let answerBefore;
   let closing = false;
+  let awakeRequested = false;
   const identity = processIdentity(process.pid);
   void detectVersions().then((found) => { versions = found; }, () => {});
   let context;
@@ -145,9 +147,12 @@ export default function installVoiceExtension(pi, { wakeLock = createWakeLock({ 
     .map((entry) => {
       const imageCount = Array.isArray(entry.message.content) ? entry.message.content.filter((part) => part.type === 'image').length : 0;
       // Never return base64 in the frequently polled state/history response.
-      return { id: entry.id, role: entry.message.role, text: textOf(entry.message).slice(-24000), ...(imageCount ? { imageCount } : {}) };
+      const stopReason = entry.message.role === 'assistant' && ['error', 'aborted'].includes(entry.message.stopReason) ? entry.message.stopReason : undefined;
+      const error = stopReason === 'error' ? String(entry.message.errorMessage || 'The model request failed.').slice(0, 1000) : undefined;
+      return { id: entry.id, role: entry.message.role, text: textOf(entry.message).slice(-24000), ...(imageCount ? { imageCount } : {}),
+        ...(stopReason ? { stopReason, ...(error ? { error } : {}) } : {}) };
     })
-    .filter((message) => message.text || message.imageCount);
+    .filter((message) => message.text || message.imageCount || message.stopReason);
 
   async function start(ctx, port) {
     context = ctx;
@@ -176,7 +181,7 @@ export default function installVoiceExtension(pi, { wakeLock = createWakeLock({ 
         },
         onPrompt(text, images = []) {
           if (images.length && !context.model?.input?.includes('image')) {
-            throw Object.assign(new Error('Select a vision-capable model before sending images.'), { status: 422 });
+            throw fail(422, 'Select a vision-capable model before sending images.');
           }
           const queued = !context.isIdle();
           const content = images.length ? [...(text ? [{ type: 'text', text }] : []), ...images] : text;
@@ -185,10 +190,14 @@ export default function installVoiceExtension(pi, { wakeLock = createWakeLock({ 
           return { ok: true, queued };
         },
         onAbort() { context.abort(); },
-        onAwake: (enabled) => wakeLock.setEnabled(enabled),
+        async onAwake(enabled) {
+          await wakeSettings.save(enabled);
+          awakeRequested = enabled;
+          return wakeLock.setEnabled(enabled, { refresh: true });
+        },
         onNewSession(id, sessionId) {
           if (newSessionAction?.id === id) return { ok: true, id };
-          if (newSessionAction?.status === 'starting') throw Object.assign(new Error('A new session is already starting.'), { status: 409 });
+          if (newSessionAction?.status === 'starting') throw fail(409, 'A new session is already starting.');
           const action = { id, sessionId, ticket: randomBytes(16).toString('hex'), status: 'starting' };
           newSessionAction = action;
           setImmediate(() => {
@@ -227,7 +236,7 @@ export default function installVoiceExtension(pi, { wakeLock = createWakeLock({ 
     bridge = undefined;
     if (old && ['new', 'resume', 'fork', 'reload'].includes(event?.reason)) {
       // The replacement runtime keeps the port and the stay-awake state.
-      await atomicJSON(reconnectFile, { port: Number(new URL(old.origin).port), awake: wakeLock.status().active, instanceId, retries: old.retryState() })
+      await atomicJSON(reconnectFile, { port: Number(new URL(old.origin).port), awake: awakeRequested, instanceId, retries: old.retryState() })
         .catch((error) => context?.ui.notify(`Pi Voice reconnect: ${error.message}`, 'warning'));
     } else await unlink(reconnectFile).catch(() => {});
     await old?.close();
@@ -245,7 +254,10 @@ export default function installVoiceExtension(pi, { wakeLock = createWakeLock({ 
       retries = Array.isArray(reconnect?.retries) ? reconnect.retries : [];
       const port = Number.isInteger(reconnect?.port) && reconnect.port > 0 && reconnect.port < 65536 ? reconnect.port : undefined;
       await start(ctx, port);
-      if (reconnect?.awake === true) await wakeLock.setEnabled(true).catch(() => {});
+      try {
+        awakeRequested = typeof reconnect?.awake === 'boolean' ? reconnect.awake : await wakeSettings.load();
+        if (awakeRequested) await wakeLock.setEnabled(true);
+      } catch (error) { ctx.ui.notify(`Pi Voice stay awake: ${error.message}`, 'warning'); }
     } catch (error) {
       ctx.ui.notify(`Pi Voice: ${error.message}`, 'error');
     }
@@ -258,6 +270,7 @@ export default function installVoiceExtension(pi, { wakeLock = createWakeLock({ 
     const branch = ctx?.sessionManager?.getBranch?.() || [];
     for (let i = branch.length - 1; i >= 0; i--) {
       const entry = branch[i];
+      if (entry.type === 'message' && entry.message.role === 'assistant' && ['error', 'aborted'].includes(entry.message.stopReason)) return;
       if (entry.type === 'message' && entry.message.role === 'assistant' && textOf(entry.message).trim()) return entry;
     }
   };
@@ -272,9 +285,17 @@ export default function installVoiceExtension(pi, { wakeLock = createWakeLock({ 
     } catch { /* Alerts are best effort. */ }
   };
   const track = {
-    agent_start: (_event, ctx) => { activity.start(); answerBefore = latestAnswer(ctx)?.id; },
-    agent_settled: (_event, ctx) => { activity.settle(); if (bridge) { void saveRecord(); replyFinished(ctx); } },
-    session_info_changed: () => { if (bridge) void saveRecord(); },
+    agent_start: async (_event, ctx) => {
+      activity.start(); answerBefore = latestAnswer(ctx)?.id;
+      // Reassert the shared Termux lock before work, even if a prior command
+      // failed or another Termux client released the Android lock meanwhile.
+      if (bridge && awakeRequested) {
+        await wakeLock.setEnabled(true, { refresh: true })
+          .catch((error) => ctx.ui.notify(`Pi Voice stay awake: ${error.message}`, 'warning'));
+      }
+    },
+    agent_settled: (_event, ctx) => { activity.settle(); if (bridge) { replyFinished(ctx); return saveRecord(); } },
+    session_info_changed: () => { if (bridge) return saveRecord(); },
     message_update: (event) => activity.stream(event.assistantMessageEvent),
     tool_execution_start: (event) => activity.toolStart(event),
     tool_execution_update: (event) => activity.toolUpdate(event),
@@ -283,10 +304,9 @@ export default function installVoiceExtension(pi, { wakeLock = createWakeLock({ 
     ui_prompt_end: () => activity.promptEnd(),
   };
   for (const event of ['message_end', 'agent_start', 'agent_settled', 'model_select', 'session_tree', 'session_compact', 'session_info_changed', 'message_update', 'tool_execution_start', 'tool_execution_update', 'tool_execution_end', 'ui_prompt_start', 'ui_prompt_end']) {
-    pi.on(event, (data, ctx) => {
-      try { track[event]?.(data || {}, ctx); } catch { /* Activity is informational only. */ }
-      if (!bridge || !ctx) return;
-      context = ctx;
+    pi.on(event, async (data, ctx) => {
+      if (bridge && ctx) context = ctx;
+      try { await track[event]?.(data || {}, ctx); } catch { /* Activity is informational only. */ }
     });
   }
 
@@ -316,6 +336,7 @@ export default function installVoiceExtension(pi, { wakeLock = createWakeLock({ 
       const action = args.trim();
       if (action === 'stop') { await stop(); ctx.ui.notify('Pi Voice disconnected from this Pi.', 'info'); return; }
       if (action === 'sleep') {
+        awakeRequested = false;
         try { await wakeLock.setEnabled(false); ctx.ui.notify('Pi Voice stay awake disabled for this session.', 'info'); }
         catch (error) { ctx.ui.notify(error.message, 'error'); }
         return;
@@ -323,7 +344,8 @@ export default function installVoiceExtension(pi, { wakeLock = createWakeLock({ 
       if (action && action !== 'awake') { ctx.ui.notify('Usage: /voice [stop|awake|sleep]', 'warning'); return; }
       try {
         await start(ctx);
-        await wakeLock.setEnabled(true).catch((error) => ctx.ui.notify(`Stay awake unavailable: ${error.message}`, 'warning'));
+        awakeRequested = true;
+        await wakeLock.setEnabled(true, { refresh: true }).catch((error) => ctx.ui.notify(`Stay awake unavailable: ${error.message}`, 'warning'));
         if (action === 'awake') ctx.ui.notify(wakeLock.status().active ? 'Termux wake lock requested. Android battery restrictions still apply.' : 'Stay awake could not be enabled. Check Android/Termux.', wakeLock.status().active ? 'info' : 'warning');
         else ctx.ui.notify('Pi Voice is connected. Open the Pi Voice app.', 'info');
       } catch (error) {
