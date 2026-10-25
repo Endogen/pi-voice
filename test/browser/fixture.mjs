@@ -2,7 +2,7 @@ import { test as base, expect } from '@playwright/test';
 import { createApiServer, readJSON, fail } from '../../transport.mjs';
 
 const modelList = [
-  { provider: 'cloud', id: 'vision', name: 'Cloud vision', input: ['text', 'image'], contextWindow: 128000 },
+  { provider: 'cloud', id: 'vision', name: 'Cloud vision', input: ['text', 'image'], contextWindow: 128000, reasoning: true },
   { provider: 'local', id: 'qwen/model:Q5', name: 'Local text', input: ['text'], contextWindow: 4096 },
 ];
 const reference = ({ provider, id }) => ({ provider, id });
@@ -10,6 +10,7 @@ const makeSession = (handle, title) => ({
   handle, title, instanceId: `instance-${handle}`, sessionId: `conversation-${handle}`, sessionName: title,
   cwd: '/test/project', pid: 100, busy: false, pending: false, messages: [],
   model: 'cloud/vision', modelSelection: reference(modelList[0]), modelSwitchingSupported: true, modelSwitching: false,
+  modelName: modelList[0].name, thinkingSupported: true, thinkingLevel: 'medium', thinkingLevels: ['off', 'minimal', 'low', 'medium', 'high'], compactSupported: true,
   imageAttachments: true, modelSupportsImages: true, wakeLock: { active: false },
   status: 'ready', managed: true, capabilities: { close: true },
 });
@@ -31,7 +32,7 @@ export const test = base.extend({
     };
     h.choose = (state, model) => {
       Object.assign(state, { model: `${model.provider}/${model.id}`, modelSelection: reference(model), modelSwitching: false,
-        modelSupportsImages: model.input.includes('image') });
+        modelSupportsImages: model.input.includes('image'), modelName: model.name, thinkingLevels: model.reasoning ? ['off', 'minimal', 'low', 'medium', 'high'] : ['off'] });
     };
     const server = await createApiServer({ token: 'a'.repeat(64), serveAssets: true,
       async handle({ req, path, send }) {
@@ -47,7 +48,9 @@ export const test = base.extend({
           send(200, snapshot);
         } else if (path === '/api/sessions') send(200, { selected: h.selected, sessions: states, stopped: [] });
         else if (path === '/api/session/select') { h.selected = body.handle; send(200, { ok: true }); }
-        else if (path === '/api/models') send(200, { sessionId: state.sessionId, current: state.modelSelection, models: modelList, contextTokens: 8000 });
+        else if (path === '/api/models') send(200, { sessionId: state.sessionId, current: state.modelSelection, models: modelList, contextTokens: 8000, contextUsage: { tokens: 8000, contextWindow: 128000 } });
+        else if (path === '/api/thinking') { state.thinkingLevel = body.level; send(200, { ok: true, thinkingLevel: body.level }); }
+        else if (path === '/api/compact') { state.compaction = { status: 'running' }; send(202, { ok: true }); }
         else if (path === '/api/model') {
           if (h.onModel) await h.onModel(body, state);
           else h.choose(state, modelList.find((model) => model.id === body.id && model.provider === body.provider));
@@ -60,7 +63,8 @@ export const test = base.extend({
         } else throw fail(404, `Unexpected route: ${path}`);
       },
     });
-    page.on('dialog', (dialog) => dialog.accept());
+    // The page asks with its own dialog; a native one would be a regression.
+    page.on('dialog', (dialog) => { errors.push(`Native ${dialog.type()} dialog: ${dialog.message()}`); void dialog.dismiss(); });
     try {
       await page.goto(server.url);
       await expect(page.locator('#connection')).toContainText('Ready');

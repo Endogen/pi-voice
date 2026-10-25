@@ -414,3 +414,35 @@ test('an active Termux recognizer excludes model changes from another client', a
   assert.equal((await h.request('/api/model', { sessionId: 'session-1' })).status, 409);
   finish('draft only'); await listening;
 });
+
+test('thinking and compaction routes are session-scoped, validated and serialized against other controls', async (t) => {
+  const missing = await setup(t);
+  assert.equal((await missing.request('/api/thinking', { sessionId: 'session-1', level: 'high' })).status, 501);
+  assert.equal((await missing.request('/api/compact', { sessionId: 'session-1' })).status, 501);
+  const thinking = [];
+  let compactions = 0;
+  const state = { sessionId: 'session-1', messages: [], busy: false };
+  const h = await setup(t, { getState: () => state, onThinking: (body) => { thinking.push(body); return { ok: true, thinkingLevel: body.level }; }, onCompact: () => { compactions++; return { ok: true }; },
+    onModel: () => { throw new Error('Must not run'); }, onNewSession: () => { throw new Error('Must not run'); } });
+  for (const body of [null, [], {}, { sessionId: 'session-1' }, { sessionId: 'session-1', level: 3 }]) assert.equal((await h.request('/api/thinking', body)).status, 400);
+  for (const body of [null, [], {}]) assert.equal((await h.request('/api/compact', body)).status, 400);
+  assert.equal((await h.request('/api/thinking', { sessionId: 'stale', level: 'high' })).status, 409);
+  assert.equal((await h.request('/api/compact', { sessionId: 'stale' })).status, 409);
+  assert.deepEqual(await (await h.request('/api/thinking', { sessionId: 'session-1', level: 'high' })).json(), { ok: true, thinkingLevel: 'high' });
+  assert.equal((await h.request('/api/compact', { sessionId: 'session-1' })).status, 202);
+  for (const flag of ['busy', 'pending', 'modelSwitching']) {
+    state[flag] = true;
+    assert.equal((await h.request('/api/compact', { sessionId: 'session-1' })).status, 409, flag);
+    state[flag] = false;
+  }
+  assert.equal(compactions, 1);
+  // While Pi compacts, sending, model changes and new sessions wait.
+  state.compaction = { status: 'running' };
+  assert.equal((await h.request('/api/prompt', prompt())).status, 409);
+  assert.equal(h.prompts.length, 0);
+  for (const [path, body] of [['model', { sessionId: 'session-1' }], ['session/new', { sessionId: 'session-1', id: 'operation-1' }]]) {
+    assert.equal((await h.request(`/api/${path}`, body)).status, 409, path);
+  }
+  assert.equal((await h.request('/api/thinking', { sessionId: 'session-1', level: 'low' }, { Origin: 'https://evil.example' })).status, 403);
+  assert.equal(thinking.length, 1);
+});

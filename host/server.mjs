@@ -9,7 +9,7 @@ import { createLauncher } from './launcher.mjs';
 import { createWorkerClient } from './worker-client.mjs';
 import { createSessionManager } from './session-manager.mjs';
 
-const workerRoutes = new Set(['GET /api/activity', 'GET /api/models', 'POST /api/model', 'POST /api/prompt', 'POST /api/abort', 'POST /api/awake', 'POST /api/listen', 'POST /api/listen/cancel']);
+const workerRoutes = new Set(['GET /api/activity', 'GET /api/models', 'POST /api/model', 'POST /api/thinking', 'POST /api/compact', 'POST /api/prompt', 'POST /api/abort', 'POST /api/awake', 'POST /api/listen', 'POST /api/listen/cancel']);
 
 export async function createHost({ directory = stateDir, port = 8865, interval = 1500, launcher = createLauncher(), managerOptions = {} } = {}) {
   const token = await loadToken(directory);

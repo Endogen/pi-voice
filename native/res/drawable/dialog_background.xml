@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Dialog card in the page's surface and border colours, with its 20dp radius. -->
+<inset xmlns:android="http://schemas.android.com/apk/res/android" android:insetLeft="24dp" android:insetRight="24dp" android:insetTop="24dp" android:insetBottom="24dp">
+  <shape android:shape="rectangle">
+    <solid android:color="#172030"/>
+    <stroke android:width="1dp" android:color="#253041"/>
+    <corners android:radius="20dp"/>
+  </shape>
+</inset>

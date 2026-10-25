@@ -11,6 +11,9 @@ import android.content.Intent;
 import android.content.pm.PackageManager;
 import android.content.res.ColorStateList;
 import android.graphics.Color;
+import android.graphics.Typeface;
+import android.graphics.drawable.GradientDrawable;
+import android.graphics.drawable.RippleDrawable;
 import android.graphics.Insets;
 import android.net.Uri;
 import android.os.Build;
@@ -189,19 +192,35 @@ public final class MainActivity extends Activity {
         message.setTextColor(Color.rgb(203, 213, 225)); message.setTextSize(16);
         message.setGravity(Gravity.CENTER); message.setPadding(0, dp(20), 0, dp(20));
         panel.addView(message);
-        retry = button("Connect", () -> connect());
-        appSettings = button("App permissions", () -> startActivity(new Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS, Uri.parse("package:" + getPackageName()))));
-        termux = button("Open Termux", () -> {
+        retry = button("Connect", true, () -> connect());
+        appSettings = button("App permissions", false, () -> startActivity(new Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS, Uri.parse("package:" + getPackageName()))));
+        termux = button("Open Termux", false, () -> {
             Intent launch = getPackageManager().getLaunchIntentForPackage("com.termux");
             if (launch != null) startActivity(launch);
         });
         root.addView(panel, new FrameLayout.LayoutParams(-1, -1));
     }
 
-    private Button button(String text, Runnable action) {
+    // Pill buttons in the page's colours instead of the platform's default style.
+    private Button button(String text, boolean primary, Runnable action) {
         Button button = new Button(this); button.setText(text);
-        button.setOnClickListener(view -> action.run()); panel.addView(button);
+        button.setAllCaps(false); button.setTextSize(15); button.setTypeface(Typeface.DEFAULT_BOLD);
+        button.setStateListAnimator(null);
+        GradientDrawable shape = new GradientDrawable();
+        shape.setCornerRadius(dp(24));
+        shape.setColor(primary ? Color.rgb(243, 244, 246) : Color.TRANSPARENT);
+        if (!primary) shape.setStroke(dp(1), Color.rgb(55, 65, 81));
+        button.setTextColor(primary ? Color.rgb(17, 24, 39) : Color.rgb(243, 244, 246));
+        button.setBackground(new RippleDrawable(ColorStateList.valueOf(Color.argb(48, 147, 180, 255)), shape, null));
+        button.setPadding(dp(24), 0, dp(24), 0);
+        LinearLayout.LayoutParams params = new LinearLayout.LayoutParams(dp(264), dp(48));
+        params.topMargin = dp(10);
+        button.setOnClickListener(view -> action.run()); panel.addView(button, params);
         return button;
+    }
+
+    private AlertDialog.Builder dialog() {
+        return new AlertDialog.Builder(this, com.pivoice.app.R.style.PiDialog);
     }
 
     private void loading(String text) {
@@ -315,7 +334,7 @@ public final class MainActivity extends Activity {
                     editor.apply();
                     if (saved.optBoolean("draft") || saved.optBoolean("images")) {
                         panel.setVisibility(View.GONE);
-                        new AlertDialog.Builder(this).setTitle("Keep your draft")
+                        dialog().setTitle("Keep your draft")
                             .setMessage("Copy or finish your draft and attachments on this page, then tap Reconnect to finish updating Pi Voice.")
                             .setPositiveButton("OK", null).show();
                         return;
@@ -355,7 +374,8 @@ public final class MainActivity extends Activity {
             if (trusted(url) && "/".equals(url.getPath())) return false;
             // External links never inherit our JS bridge or run automatically.
             if (request.isForMainFrame() && request.hasGesture() && ("https".equals(url.getScheme()) || "http".equals(url.getScheme())) && !"127.0.0.1".equals(url.getHost())) {
-                new AlertDialog.Builder(MainActivity.this).setTitle("Open external link?").setMessage("This leaves Pi Voice and opens your browser.")
+                // Stays native: page content must not be able to fake leaving the app.
+                dialog().setTitle("Open external link?").setMessage(url.getHost() + "\n\nThis leaves Pi Voice and opens your browser.")
                     .setPositiveButton("Open", (dialog, which) -> { try { startActivity(new Intent(Intent.ACTION_VIEW, url)); } catch (RuntimeException ignored) {} })
                     .setNegativeButton("Cancel", null).show();
             }
@@ -384,7 +404,8 @@ public final class MainActivity extends Activity {
         @Override public void onPermissionRequest(PermissionRequest request) { request.deny(); }
         @Override public boolean onJsConfirm(WebView view, String url, String text, JsResult result) {
             if (!trustedPage()) { result.cancel(); return true; }
-            new AlertDialog.Builder(MainActivity.this).setTitle("Pi Voice").setMessage(text)
+            // Current pages ask with their own dialog; this serves older pages.
+            dialog().setTitle("Pi Voice").setMessage(text)
                 .setPositiveButton("Continue", (dialog, which) -> result.confirm())
                 .setNegativeButton("Cancel", (dialog, which) -> result.cancel())
                 .setOnCancelListener(dialog -> result.cancel()).show();

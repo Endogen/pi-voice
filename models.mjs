@@ -17,6 +17,24 @@ export function publicModel(model) {
   };
 }
 
+// Mirrors Pi's getSupportedThinkingLevels. Pi clamps every request again and
+// the level is always read back, so a mismatch is shown, never assumed.
+export const thinkingLevels = ['off', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max'];
+export function supportedThinkingLevels(model) {
+  if (!model) return [];
+  if (!model.reasoning) return ['off'];
+  return thinkingLevels.filter((level) => {
+    const mapped = model.thinkingLevelMap?.[level];
+    return mapped !== null && (!['xhigh', 'max'].includes(level) || mapped !== undefined);
+  });
+}
+function contextUsage(ctx) {
+  let usage;
+  try { usage = ctx.getContextUsage?.(); } catch { return null; }
+  if (!usage) return null;
+  return { tokens: Number.isSafeInteger(usage.tokens) && usage.tokens >= 0 ? usage.tokens : null, contextWindow: positive(usage.contextWindow) ?? null };
+}
+
 /** Session-scoped adapter. Pi owns authentication, persistence and capabilities. */
 export function createModelSelection({ pi, getContext, blocked = () => false }) {
   let switching = false;
@@ -47,9 +65,29 @@ export function createModelSelection({ pi, getContext, blocked = () => false }) 
         if (seen.has(key)) return false;
         seen.add(key); return true;
       }).sort((a, b) => a.provider.localeCompare(b.provider) || a.name.localeCompare(b.name) || a.id.localeCompare(b.id));
-      const usage = ctx.getContextUsage?.();
+      // Pi's scoped models (enabledModels, its Ctrl+P cycle) are listed first.
+      const scoped = new Set((ctx.scopedModels || []).map((item) => JSON.stringify([item?.model?.provider, item?.model?.id])));
+      for (const model of models) if (scoped.has(JSON.stringify([model.provider, model.id]))) model.scoped = true;
+      const usage = contextUsage(ctx);
       return { sessionId: ctx.sessionManager.getSessionId(), current: modelReference(ctx.model), models,
-        contextTokens: Number.isSafeInteger(usage?.tokens) && usage.tokens >= 0 ? usage.tokens : null };
+        contextTokens: usage?.tokens ?? null, contextUsage: usage };
+    },
+    thinking() {
+      if (typeof pi.getThinkingLevel !== 'function' || typeof pi.setThinkingLevel !== 'function') return { supported: false, level: null, levels: [] };
+      let level;
+      try { level = pi.getThinkingLevel(); } catch {}
+      return { supported: true, level: thinkingLevels.includes(level) ? level : null, levels: supportedThinkingLevels(getContext()?.model) };
+    },
+    setThinking({ sessionId, level }) {
+      if (!this.thinking().supported) throw fail(501, 'Thinking levels are unavailable. Restart Pi after updating.');
+      if (!thinkingLevels.includes(level)) throw fail(400, 'Choose a valid thinking level.');
+      checkSession(sessionId);
+      // A level applies to Pi's next request, so a running task is fine; a model
+      // change would re-clamp it underneath this request.
+      if (switching || blocked()) throw fail(409, 'Wait for the current model change or session action to finish.');
+      if (!supportedThinkingLevels(getContext().model).includes(level)) throw fail(422, 'This model does not support that thinking level.');
+      pi.setThinkingLevel(level);
+      return { ok: true, thinkingLevel: this.thinking().level };
     },
     async select({ sessionId, provider, id, expectedModel }) {
       if (!supported()) throw fail(501, 'Model switching is unavailable. Restart Pi after updating.');

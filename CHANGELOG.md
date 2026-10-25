@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+- **Thinking level and compaction.** The new **Model** sheet sets Pi's thinking level for the session (only the levels the model supports; applies to Pi's next request, also while it works) and shows context use with a **Compact conversation** action (Pi's `/compact`). Compaction runs only while Pi is idle, pauses sending but not typing, can be stopped with Stop, and reports success, failure or cancellation.
+- **Model switching, reworked.** A chip beside the microphone shows the session's model and thinking level and opens the Model sheet; Settings → Connected Pi links to it. The model list is drawn by the page instead of Android's native picker, lists Pi's scoped models first, and switches with one tap. It asks only when a switch has a cost: another provider, a smaller context window, or images the model cannot receive. All earlier safeguards against stale targets, lost acknowledgements and retries remain.
+- **No more native Android widgets in the page.** Confirmations (new session, close session, stop task, stop service, open terminal, model change, compaction) use the app's own dialog with red buttons for destructive actions; the speech engine is a segmented control. Browser tests now fail if the page opens a native dialog.
+- The remaining Android-drawn dialogs (open an external link, keep your draft during an update) and the start screen's buttons use the app's colours and shapes. The external-link dialog now shows the destination host. **APK update required** for these; everything else works with the current 3.x app shell.
+
+Restart the host and Pi workers after their tasks finish to enable thinking levels and compaction (see [Updating](README.md#updating)); older workers show restart guidance in the Model sheet.
+
 - Extracted the session controller and polling coordinator from the main frontend. Added real Chromium tests at desktop and phone sizes for dialogs, image decoding, model/session races, notification navigation and failed replies; CI retains failure traces and screenshots.
 - Workers restore the saved app stay-awake preference at cold startup without waiting for the page, and reassert the Termux wake lock before each agent run. Disabled preferences and per-worker `/voice sleep` overrides are respected. This improves CPU wakefulness but cannot override Android/OEM network restrictions or process killing.
 - Failed or aborted assistant replies remain visible even when empty; the UI reports the error rather than silently returning to idle. Failures do not play success feedback or automatically replay work.

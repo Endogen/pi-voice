@@ -11,4 +11,18 @@
     <item name="android:navigationBarColor">#111827</item>
   </style>
   <style name="AppTheme" parent="BaseAppTheme" />
+  <!-- The few dialogs Android must show itself match the page's own dialogs. -->
+  <style name="PiDialog" parent="android:style/Theme.Material.Dialog.Alert">
+    <item name="android:windowBackground">@drawable/dialog_background</item>
+    <item name="android:colorBackground">#172030</item>
+    <item name="android:colorAccent">#93B4FF</item>
+    <item name="android:textColorPrimary">#F3F4F6</item>
+    <item name="android:textColorSecondary">#9CA3AF</item>
+    <item name="android:backgroundDimAmount">0.66</item>
+    <item name="android:buttonBarButtonStyle">@style/PiDialogButton</item>
+  </style>
+  <style name="PiDialogButton" parent="android:style/Widget.Material.Button.Borderless.Colored">
+    <item name="android:textAllCaps">false</item>
+    <item name="android:textSize">15sp</item>
+  </style>
 </resources>

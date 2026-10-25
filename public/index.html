@@ -57,6 +57,7 @@
         <div class="prompt-toolbar">
           <button id="attach" class="icon-button" aria-label="Attach images" aria-controls="image-input" title="Attach up to 4 images (JPEG, PNG, WebP)" disabled><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m16 6-8.4 8.4a2 2 0 0 0 2.8 2.8l8.4-8.4a4 4 0 0 0-5.6-5.6L4.8 11.6a6 6 0 0 0 8.5 8.5L20 13.4"/></svg></button>
           <button id="clear" class="icon-button" aria-label="Clear draft and images" title="Clear draft and images" hidden><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M18 6 6 18M6 6l12 12"/></svg></button>
+          <button id="open-model" class="model-chip" aria-haspopup="dialog" aria-controls="model-dialog" title="Model and thinking level" hidden><span id="model-chip-label">Model</span><span id="model-chip-level" hidden></span><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m7 10 5 5 5-5"/></svg></button>
           <span id="listening" class="compose-hint" role="status">Review, then send</span>
           <button id="microphone" class="round-button mic" aria-label="Speak" title="Speak" disabled><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="9" y="2.5" width="6" height="12" rx="3"/><path d="M5 10.5v1a7 7 0 0 0 14 0v-1M12 18.5v3"/></svg><span id="microphone-label" class="sr-only">Speak</span></button>
           <button id="send" class="round-button send" aria-label="Send" title="Send" disabled><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 19V5M5.5 11.5 12 5l6.5 6.5"/></svg></button>
@@ -93,17 +94,43 @@
     <div class="sheet-body"><p class="hint">Newest messages first. Tool output stays in Termux.</p><div id="messages"></div></div>
   </dialog>
 
+  <dialog id="model-dialog" class="sheet" aria-labelledby="model-title">
+    <div class="sheet-header"><h2 id="model-title">Model</h2><button id="close-model" class="icon-button" aria-label="Close model settings"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M18 6 6 18M6 6l12 12"/></svg></button></div>
+    <div class="sheet-body">
+      <p id="model-support" class="hint">Connect a Pi session to choose its model.</p>
+      <section id="thinking-section" class="options-section" aria-labelledby="thinking-heading" hidden>
+        <h3 id="thinking-heading">Thinking level</h3>
+        <div id="thinking-levels" class="segmented levels" role="radiogroup" aria-labelledby="thinking-heading" aria-describedby="thinking-status"></div>
+        <p id="thinking-status" class="hint" role="status" aria-live="polite"></p>
+      </section>
+      <section id="context-section" class="options-section" aria-labelledby="context-heading" hidden>
+        <h3 id="context-heading">Context</h3>
+        <div class="meter" aria-hidden="true"><span id="context-meter"></span></div>
+        <p id="context-usage" class="context-usage">Checking context use…</p>
+        <button id="compact" class="wide-button outline"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 14h6v6M20 10h-6V4M14 10l7-7M3 21l7-7"/></svg><span id="compact-label">Compact conversation</span></button>
+        <p id="compact-status" class="hint" role="status" aria-live="polite">Pi summarizes earlier messages so the conversation fits the model again. It also does this by itself when the context is nearly full.</p>
+      </section>
+      <section id="model-controls" class="options-section" aria-labelledby="models-heading" hidden>
+        <div class="section-heading"><h3 id="models-heading">Model for this session</h3><button id="model-refresh" class="icon-button" aria-label="Refresh models" title="Refresh models"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M20 12a8 8 0 1 1-2.3-5.6"/><path d="M20 4v5h-5"/></svg></button></div>
+        <input id="model-filter" type="text" placeholder="Find by name, ID or provider" autocomplete="off" spellcheck="false" aria-label="Find a model" aria-controls="model-list" hidden>
+        <div id="model-list" class="option-list" role="radiogroup" aria-labelledby="models-heading" aria-describedby="model-status"></div>
+        <p id="model-status" class="hint" role="status" aria-live="polite"></p>
+        <p class="hint">Lists the models configured in Pi; being listed does not mean a provider or local server is online. A change applies only to this conversation, not other sessions or Pi’s default, and there is no automatic cloud fallback.</p>
+      </section>
+    </div>
+  </dialog>
+
   <dialog id="settings-dialog" class="sheet" aria-labelledby="settings-title">
     <div class="sheet-header"><h2 id="settings-title">Settings</h2><button id="close-settings" class="icon-button" aria-label="Close settings"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M18 6 6 18M6 6l12 12"/></svg></button></div>
     <div class="sheet-body settings-body">
       <section class="settings-section" aria-label="Speech settings">
         <h3>Voice input</h3>
         <p class="hint">Off by default, so you can review the transcript first.</p>
-        <label for="engine">Speech engine</label>
-        <select id="engine"><option id="speech-primary" value="browser">Android speech (recommended)</option><option value="termux">Termux:API (fallback)</option></select>
+        <span id="engine-label" class="field-label">Speech engine</span>
+        <div id="engine" class="segmented" role="radiogroup" aria-labelledby="engine-label"><button id="engine-browser" type="button" role="radio" aria-checked="true">Android speech</button><button id="engine-termux" type="button" role="radio" aria-checked="false">Termux:API</button></div>
         <label id="speech-language-label" for="language">Speech language</label>
         <input id="language" type="text" value="en-US" maxlength="35" placeholder="en-US, de-DE, …" autocapitalize="off" spellcheck="false">
-        <p class="hint">The Termux:API fallback uses its own language setting. Allow microphone access when Android asks. Your speech provider may process audio online; this app stores no audio.</p>
+        <p class="hint">Android speech is recommended; use Termux:API if it does not work on your phone. The Termux:API fallback uses its own language setting. Allow microphone access when Android asks. Your speech provider may process audio online; this app stores no audio.</p>
       </section>
       <section class="settings-section" aria-label="Read replies aloud">
         <h3>Voice output</h3>
@@ -129,21 +156,17 @@
       </section>
       <section class="settings-section session" aria-label="Connected session">
         <h3>Connected Pi</h3><strong id="session">No session connected</strong><small id="directory"></small><small id="model"></small>
-        <p id="model-support" class="hint">Connect a Pi session to choose its model.</p>
-        <div id="model-controls" class="model-controls" hidden>
-          <label class="field-label" for="model-filter">Find a model</label>
-          <input id="model-filter" type="text" placeholder="Filter by name, ID or provider" autocomplete="off" spellcheck="false" aria-controls="model-choice">
-          <label class="field-label" for="model-choice">Model for this session</label>
-          <select id="model-choice" aria-describedby="model-details model-status"></select>
-          <p id="model-details" class="hint model-details"></p>
-          <div class="model-actions"><button id="model-refresh" class="quiet">Refresh models</button><button id="model-apply">Use model</button></div>
-          <p id="model-status" class="hint" role="status" aria-live="polite"></p>
-          <p class="hint">Uses Pi’s configured providers. A model change keeps this conversation and does not change other sessions or Pi’s default. Local servers must already be running; no automatic cloud fallback.</p>
-        </div>
+        <button id="settings-model" class="wide-button outline" aria-haspopup="dialog" aria-controls="model-dialog" disabled><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3v3M12 18v3M3 12h3M18 12h3"/><circle cx="12" cy="12" r="5"/></svg>Model, thinking &amp; context</button>
       </section>
       <section class="settings-section" aria-label="Versions"><h3>About</h3><dl class="about"><div><dt>Pi Voice</dt><dd id="voice-version">—</dd></div><div><dt>Pi</dt><dd id="pi-version">—</dd></div></dl><p id="version-hint" class="hint" hidden></p></section>
       <section class="settings-section"><h3>Termux</h3><p class="hint">Pi runs in Termux in the background; this app starts it and resumes your conversation if it stopped. To see Pi’s terminal, open Activity and tap Open in Termux. In Pi, <code>/voice stop</code> disconnects the app and <code>/voice</code> reconnects it. Phone-only connection; no public server.</p></section>
     </div>
+  </dialog>
+
+  <dialog id="confirm-dialog" class="alert" aria-labelledby="confirm-title" aria-describedby="confirm-message">
+    <h2 id="confirm-title"></h2>
+    <div id="confirm-message" class="alert-message"></div>
+    <div class="alert-actions"><button id="confirm-cancel" class="alert-button">Cancel</button><button id="confirm-accept" class="alert-button primary">Continue</button></div>
   </dialog>
 </body>
 </html>

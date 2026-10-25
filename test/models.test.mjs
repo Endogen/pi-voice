@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { createModelSelection, publicModel } from '../models.mjs';
+import { createModelSelection, publicModel, supportedThinkingLevels } from '../models.mjs';
 
 function setup() {
   const first = { provider: 'cloud-a', id: 'one', name: 'One', input: ['text', 'image'], contextWindow: 128000 };
@@ -114,4 +114,49 @@ test('old Pi API and broken registries fail clearly without leaking configuratio
   assert.equal(h.controller.supported(), false);
   assert.throws(() => h.controller.list(), (error) => error.status === 501);
   await assert.rejects(h.controller.select(h.body()), (error) => error.status === 501);
+});
+
+test('thinking levels mirror Pi’s model capabilities', () => {
+  assert.deepEqual(supportedThinkingLevels(undefined), []);
+  assert.deepEqual(supportedThinkingLevels({ reasoning: false }), ['off']);
+  assert.deepEqual(supportedThinkingLevels({ reasoning: true }), ['off', 'minimal', 'low', 'medium', 'high']);
+  assert.deepEqual(supportedThinkingLevels({ reasoning: true, thinkingLevelMap: { minimal: null, xhigh: 'xhigh', max: null } }), ['off', 'low', 'medium', 'high', 'xhigh']);
+});
+
+test('thinking changes are session-scoped, validated, never race a model change and read Pi’s clamped level back', async () => {
+  const h = setup();
+  assert.deepEqual(h.controller.thinking(), { supported: false, level: null, levels: [] }, 'Older Pi has no thinking API');
+  assert.throws(() => h.controller.setThinking({ sessionId: 'session-one', level: 'high' }), (error) => error.status === 501);
+  let level = 'medium';
+  const set = [];
+  h.pi.getThinkingLevel = () => level;
+  h.pi.setThinkingLevel = (next) => { set.push(next); level = next === 'xhigh' ? 'high' : next; };
+  h.ctx.model = h.next;
+  assert.deepEqual(h.controller.thinking(), { supported: true, level: 'medium', levels: ['off', 'minimal', 'low', 'medium', 'high'] });
+  assert.deepEqual(h.controller.setThinking({ sessionId: 'session-one', level: 'high' }), { ok: true, thinkingLevel: 'high' });
+  for (const [body, status] of [[{ sessionId: 'session-one', level: 'loud' }, 400], [{ sessionId: 'stale', level: 'low' }, 409], [{ sessionId: 'session-one', level: 'xhigh' }, 422]]) {
+    assert.throws(() => h.controller.setThinking(body), (error) => error.status === status, JSON.stringify(body));
+  }
+  h.ctx.model = h.first; // No reasoning: only "off".
+  assert.throws(() => h.controller.setThinking({ sessionId: 'session-one', level: 'low' }), (error) => error.status === 422);
+  let finish;
+  h.ctx.model = h.next;
+  h.pi.setModel = () => new Promise((resolve) => { finish = resolve; });
+  const switching = h.controller.select({ ...h.body(), id: h.first.id, provider: h.first.provider, expectedModel: { provider: h.next.provider, id: h.next.id } });
+  assert.throws(() => h.controller.setThinking({ sessionId: 'session-one', level: 'low' }), (error) => error.status === 409);
+  finish(true); await switching.catch(() => {});
+  assert.deepEqual(set, ['high']);
+});
+
+test('model lists mark Pi’s scoped models and report context use with its window', () => {
+  const h = setup();
+  h.ctx.scopedModels = [{ model: h.next, thinkingLevel: 'high' }];
+  h.ctx.getContextUsage = () => ({ tokens: 3000, contextWindow: 4096, percent: 73 });
+  const list = h.controller.list();
+  assert.deepEqual(list.models.map((model) => Boolean(model.scoped)), [false, true]);
+  assert.deepEqual(list.contextUsage, { tokens: 3000, contextWindow: 4096 });
+  h.ctx.getContextUsage = () => ({ tokens: null, contextWindow: 4096, percent: null });
+  assert.deepEqual(h.controller.list().contextUsage, { tokens: null, contextWindow: 4096 }, 'Unknown right after compaction');
+  h.ctx.getContextUsage = () => { throw new Error('No usage'); };
+  assert.equal(h.controller.list().contextUsage, null);
 });

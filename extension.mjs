@@ -89,7 +89,9 @@ export default function installVoiceExtension(pi, { wakeLock = createWakeLock({ 
   let context;
   let starting;
   let newSessionAction;
-  const models = createModelSelection({ pi, getContext: () => context, blocked: () => closing || newSessionAction?.status === 'starting' });
+  let compaction;
+  const compacting = () => compaction?.status === 'running';
+  const models = createModelSelection({ pi, getContext: () => context, blocked: () => closing || compacting() || newSessionAction?.status === 'starting' });
   const endpointFile = join(stateDir, 'endpoints', `${process.pid}.json`);
   // Runtime replacement carries transport identity and accepted request hashes,
   // never a stale Pi context, across /new, /resume and /reload.
@@ -113,6 +115,10 @@ export default function installVoiceExtension(pi, { wakeLock = createWakeLock({ 
       modelSelection: modelReference(context.model),
       modelSwitchingSupported: models.supported(),
       modelSwitching: models.switching,
+      modelName: typeof context.model?.name === 'string' ? context.model.name.slice(0, 200) : undefined,
+      ...(({ supported, level, levels }) => ({ thinkingSupported: supported, thinkingLevel: level, thinkingLevels: levels }))(models.thinking()),
+      compactSupported: typeof context.compact === 'function',
+      compaction: compaction ? { status: compaction.status, error: compaction.error, tokensBefore: compaction.tokensBefore, ended: compaction.ended } : undefined,
       imageAttachments: imageLimits,
       modelSupportsImages: Boolean(context.model?.input?.includes('image')),
       busy: !context.isIdle(),
@@ -167,6 +173,26 @@ export default function installVoiceExtension(pi, { wakeLock = createWakeLock({ 
         getActivity: () => ({ ...activity.snapshot(), terminal: getTerminal() }),
         getModels: () => models.list(),
         onModel: (selection) => models.select(selection),
+        onThinking: (body) => models.setThinking(body),
+        onCompact() {
+          if (typeof context.compact !== 'function') throw fail(501, 'Compaction is unavailable. Restart Pi after updating.');
+          if (compacting()) throw fail(409, 'Pi is already compacting this conversation.');
+          if (closing || models.switching || newSessionAction?.status === 'starting' || !context.isIdle() || context.hasPendingMessages()) {
+            throw fail(409, 'Finish or stop the current task before compacting.');
+          }
+          // Pi summarizes in the background; the state poll reports the outcome.
+          // Stop (abort) also cancels a running compaction.
+          const entry = { status: 'running' };
+          compaction = entry;
+          const settle = (status, details = {}) => { if (compaction === entry && entry.status === 'running') Object.assign(entry, { status, ended: Date.now(), ...details }); };
+          try {
+            context.compact({
+              onComplete: (result) => settle('done', { tokensBefore: Number.isSafeInteger(result?.tokensBefore) ? result.tokensBefore : undefined }),
+              onError: (error) => settle(entry.cancelled || /cancel|abort/i.test(error?.message || '') ? 'cancelled' : 'error', { error: String(error?.message || 'Compaction failed.').slice(0, 300) }),
+            });
+          } catch (error) { settle('error', { error: String(error?.message || 'Compaction failed.').slice(0, 300) }); throw fail(502, `Pi could not compact: ${entry.error}`); }
+          return { ok: true };
+        },
         onClose() {
           // Only app-started sessions: never quit a Pi the user runs in a terminal.
           if (!managedId) throw fail(409, 'Only sessions started from the app can be closed here. Quit this one in Termux.');
@@ -189,7 +215,7 @@ export default function installVoiceExtension(pi, { wakeLock = createWakeLock({ 
           pi.sendUserMessage(content, { deliverAs: 'followUp', expandPromptTemplates: false });
           return { ok: true, queued };
         },
-        onAbort() { context.abort(); },
+        onAbort() { if (compacting()) compaction.cancelled = true; context.abort(); },
         async onAwake(enabled) {
           await wakeSettings.save(enabled);
           awakeRequested = enabled;

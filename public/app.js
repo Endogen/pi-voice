@@ -249,17 +249,58 @@ globalThis.PiVoicePlayback = (() => {
 })();
 
 ;
+/* App-styled confirmations. window.confirm would show Android's native dialog. */
+(() => {
+  'use strict';
+  function create({ element: $, createElement }) {
+    let pending;
+    const dialog = $('confirm-dialog');
+    function finish(answer) {
+      const current = pending;
+      pending = undefined;
+      if (dialog.open) dialog.close();
+      current?.(answer);
+    }
+    // Resolves true only for the confirm button. Cancel, Escape, Android back and
+    // tapping outside all decline; a newer question declines the older one.
+    function ask({ title, message, confirm = 'Continue', cancel = 'Cancel', danger = false }) {
+      finish(false);
+      $('confirm-title').textContent = title;
+      $('confirm-message').replaceChildren(...[].concat(message).filter(Boolean).map((text) => {
+        const paragraph = createElement('p');
+        paragraph.textContent = text;
+        return paragraph;
+      }));
+      $('confirm-accept').textContent = confirm;
+      $('confirm-accept').classList.toggle('danger', danger);
+      $('confirm-cancel').textContent = cancel;
+      const answer = new Promise((resolve) => { pending = resolve; });
+      dialog.showModal();
+      return answer;
+    }
+    $('confirm-accept').addEventListener('click', () => finish(true));
+    $('confirm-cancel').addEventListener('click', () => finish(false));
+    // The close event is queued: ignore it if a newer question reopened the dialog.
+    dialog.addEventListener('close', () => { if (!dialog.open) finish(false); });
+    dialog.addEventListener('click', (event) => { if (event.target === dialog) finish(false); });
+    return { ask };
+  }
+  globalThis.PiVoiceDialogs = Object.freeze({ create });
+})();
+
+;
 /* A registry-backed picker, not a provider client or local runtime manager. */
 (() => {
   'use strict';
   const keyOf = (model) => model ? JSON.stringify([model.provider, model.id]) : '';
   const labelOf = (model) => `${model.provider}/${model.id}`;
   const valid = (model) => model && typeof model.provider === 'string' && typeof model.id === 'string';
+  const tokens = (count) => count >= 1e6 ? `${+(count / 1e6).toFixed(1)}M` : count >= 1000 ? `${Math.round(count / 1000)}K` : String(count);
+  const check = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="m5 12.5 4.5 4.5L19 7.5"/></svg>';
   function create({ element: $, createElement, request, target, state, blockedReason, changed, refresh, notify, confirm, hasImages }) {
     let identity;
     let currentKey;
     let data;
-    let chosen;
     let loading;
     let operation;
     let uncertain;
@@ -269,60 +310,83 @@ globalThis.PiVoicePlayback = (() => {
     let message = '';
     let error = false;
     const isCurrent = (capture) => identity === capture.key && target().key === capture.key;
-    const selected = () => data?.models.find((model) => keyOf(model) === $('model-choice').value);
     const setMessage = (text, failed = false) => { message = text; error = failed; };
-    function renderChoices() {
+    const changing = () => operation || accepted || uncertain;
+    function row(model, { current, unavailable = false, grouped = false }) {
+      const button = createElement('button');
+      button.className = `option-row${current ? ' current' : ''}`;
+      button.dataset.key = keyOf(model);
+      button.setAttribute('role', 'radio');
+      button.setAttribute('aria-checked', String(current));
+      const text = createElement('span');
+      text.className = 'option-text';
+      const title = createElement('span');
+      title.className = 'option-title';
+      title.textContent = unavailable ? labelOf(model) : model.name || model.id;
+      const sub = createElement('span');
+      sub.className = 'option-sub';
+      sub.textContent = unavailable ? 'Current, no longer configured in Pi'
+        : [grouped ? '' : model.provider, model.contextWindow ? `${tokens(model.contextWindow)} context` : '', model.input?.includes('image') ? 'Images' : 'Text only', model.reasoning ? 'Thinking' : ''].filter(Boolean).join(' · ');
+      text.append(title, sub);
+      const mark = createElement('span');
+      mark.className = 'option-mark';
+      const pending = changing();
+      if (pending && keyOf(pending) === keyOf(model)) { mark.textContent = 'Changing…'; mark.className = 'option-mark busy'; }
+      else if (current) mark.innerHTML = check;
+      button.append(text, mark);
+      button.disabled = unavailable;
+      if (!unavailable) button.addEventListener('click', () => { void apply(model); });
+      return button;
+    }
+    function heading(text) {
+      const label = createElement('span');
+      label.className = 'option-group';
+      label.textContent = text;
+      return label;
+    }
+    function renderList() {
       const query = $('model-filter').value.trim().toLowerCase();
-      const options = [];
-      const groups = new Map();
-      const matching = (data?.models || []).filter((model) => `${model.name} ${model.provider} ${model.id}`.toLowerCase().includes(query));
+      const models = data?.models || [];
       const current = state()?.modelSelection;
-      // Keep the active/selected entry visible when filtering. An unavailable
-      // current model is informational, never offered as an authenticated model.
-      const kept = data?.models.find((model) => keyOf(model) === keyOf(chosen));
-      if (kept && !matching.includes(kept)) matching.unshift(kept);
-      if (current && !data?.models.some((model) => keyOf(model) === keyOf(current))) {
-        const option = createElement('option');
-        option.value = keyOf(current); option.textContent = `${labelOf(current)} (current, unavailable)`; option.disabled = true;
-        options.push(option);
+      const matching = models.filter((model) => `${model.name} ${model.provider} ${model.id}`.toLowerCase().includes(query));
+      const items = [];
+      // An unavailable current model is informational, never offered as authenticated.
+      if (current && data && !models.some((model) => keyOf(model) === keyOf(current))) items.push(row(current, { current: true, unavailable: true }));
+      const scoped = matching.filter((model) => model.scoped);
+      if (scoped.length) items.push(heading('Scoped in Pi'), ...scoped.map((model) => row(model, { current: keyOf(model) === keyOf(current) })));
+      let provider;
+      for (const model of matching.filter((item) => !item.scoped)) {
+        if (model.provider !== provider) { provider = model.provider; items.push(heading(provider)); }
+        items.push(row(model, { current: keyOf(model) === keyOf(current), grouped: true }));
       }
-      for (const model of matching) {
-        let group = groups.get(model.provider);
-        if (!group) { group = createElement('optgroup'); group.label = model.provider; groups.set(model.provider, group); options.push(group); }
-        const option = createElement('option');
-        option.value = keyOf(model); option.textContent = `${model.name || model.id}${keyOf(model) === keyOf(current) ? ' · Current' : ''}`;
-        group.append(option);
+      if (data && !matching.length) {
+        const empty = createElement('p');
+        empty.className = 'option-empty';
+        empty.textContent = query ? 'No matching models.' : 'No available models.';
+        items.push(empty);
       }
-      if (!options.length) {
-        const empty = createElement('option'); empty.value = ''; empty.textContent = query ? 'No matching models' : 'No available models'; empty.disabled = true; options.push(empty);
-      }
-      $('model-choice').replaceChildren(...options);
-      $('model-choice').value = keyOf(chosen);
+      $('model-list').replaceChildren(...items);
+      $('model-filter').hidden = models.length < 8;
     }
     function render() {
       const ready = state()?.modelSwitchingSupported === true;
       const reason = blockedReason();
-      const changing = Boolean(operation || accepted);
       $('model-controls').hidden = !ready;
       $('model-support').hidden = ready;
       $('model-support').textContent = !state() || state().empty ? 'Connect a Pi session to choose its model.' : 'Restart this Pi after updating to enable model switching.';
-      $('model-refresh').disabled = !ready || Boolean(loading || changing) || !target().handle;
-      $('model-filter').disabled = Boolean(loading || changing) || !data;
-      $('model-choice').disabled = Boolean(loading || changing) || !data?.models.length;
-      const model = selected();
-      $('model-apply').disabled = Boolean(reason || loading || changing) || !model || keyOf(model) === keyOf(state()?.modelSelection);
-      $('model-apply').textContent = changing ? 'Changing…' : 'Use model';
-      const details = model ? [labelOf(model), model.contextWindow ? `${model.contextWindow.toLocaleString()} token context` : 'Context unknown', model.input?.includes('image') ? 'Images' : 'Text only', model.reasoning ? 'Reasoning' : ''].filter(Boolean).join(' · ') : '';
-      $('model-details').textContent = details;
-      $('model-status').textContent = loading ? 'Loading Pi’s configured models…' : operation ? 'Changing this session’s model…' : accepted ? 'Change accepted. Waiting for Pi’s state to confirm the active model.' : error ? message : reason || message || (data?.models.length ? 'Configured models only. Availability does not check whether a provider or local server is online.' : 'No available models. Configure a provider and authentication in Pi, then refresh.');
+      $('model-refresh').disabled = !ready || Boolean(loading || changing()) || !target().handle;
+      $('model-filter').disabled = Boolean(loading) || !data;
+      $('model-list').classList.toggle('locked', Boolean(reason || loading || changing()));
+      $('model-list').setAttribute('aria-busy', String(Boolean(loading || changing())));
+      $('model-status').textContent = loading ? 'Loading Pi’s configured models…' : operation ? 'Changing this session’s model…' : accepted ? 'Change accepted. Waiting for Pi’s state to confirm the active model.' : error ? message : reason || message || (data?.models.length ? '' : data ? 'No available models. Configure a provider and authentication in Pi, then refresh.' : '');
       $('model-status').classList.toggle('error', error);
     }
     function sync() {
       const capture = target();
       if (capture.key !== identity) {
-        identity = capture.key; currentKey = undefined; data = undefined; chosen = undefined;
+        identity = capture.key; currentKey = undefined; data = undefined;
         loading = undefined; operation = undefined; uncertain = undefined; accepted = undefined; acceptedState = undefined; loadFailed = false; setMessage('');
-        $('model-filter').value = ''; renderChoices();
+        $('model-filter').value = ''; renderList();
       }
       const next = keyOf(state()?.modelSelection);
       if (next !== currentKey && currentKey !== undefined && !uncertain && !accepted && !operation) setMessage('');
@@ -332,23 +396,20 @@ globalThis.PiVoicePlayback = (() => {
         setMessage(`Pi confirms this session is using ${labelOf(uncertain)}; the request acknowledgement was lost.`);
         uncertain = undefined;
       } else if (uncertain && !operation && state()?.modelSwitchingSupported && !state().modelSwitching) {
-        setMessage('Model change not confirmed. Pi is no longer changing models; check the displayed active model before retrying.', true);
+        setMessage('Model change not confirmed. Pi is no longer changing models; check the active model before retrying.', true);
         uncertain = undefined;
       }
       // Termux may switch back to the original model before we observe the
       // accepted choice. A later idle snapshot must still release the controls.
       if (accepted && (next === keyOf(accepted) || next !== currentKey
         || (!operation && state() !== acceptedState && state()?.modelSwitchingSupported && !state().modelSwitching))) {
-        setMessage(next === keyOf(accepted) ? `Using ${labelOf(accepted)} for this session.` : 'Pi’s model changed again. Check the displayed active model before continuing.', next !== keyOf(accepted));
+        setMessage(next === keyOf(accepted) ? `Using ${labelOf(accepted)} for this session.` : 'Pi’s model changed again. Check the active model before continuing.', next !== keyOf(accepted));
         accepted = undefined;
         acceptedState = undefined;
       }
-      if (next !== currentKey) {
-        currentKey = next; chosen = state()?.modelSelection;
-        renderChoices();
-      }
+      if (next !== currentKey) { currentKey = next; renderList(); }
       render();
-      if ($('settings-dialog').open && state()?.modelSwitchingSupported && !data && !loading && !loadFailed && capture.handle && !blockedReason()) void load();
+      if ($('model-dialog').open && state()?.modelSwitchingSupported && !data && !loading && !loadFailed && capture.handle && !blockedReason()) void load();
     }
     async function load() {
       syncIdentityOnly();
@@ -361,65 +422,217 @@ globalThis.PiVoicePlayback = (() => {
         if (result.sessionId !== capture.sessionId || keyOf(result.current) !== keyOf(state()?.modelSelection)) throw new Error('Pi’s session or model changed while loading. Refresh models and review the selection.');
         if (!Array.isArray(result.models)) throw new Error('Pi returned an invalid model list. Update Pi Voice and restart this Pi.');
         data = { ...result, models: result.models.filter(valid) };
-        chosen = state()?.modelSelection;
-        renderChoices();
+        renderList();
       } catch (failure) {
         if (!isCurrent(capture) || loading !== capture) return;
         loadFailed = true;
         setMessage([404, 501].includes(failure.status) ? 'Update Pi Voice and restart its host and this Pi to enable model switching.' : failure.message, true);
       } finally {
-        if (isCurrent(capture) && loading === capture) { loading = undefined; render(); }
+        if (isCurrent(capture) && loading === capture) { loading = undefined; render(); changed(); }
       }
     }
     function syncIdentityOnly() {
       // Invalidate stale requests immediately, even before the next state poll.
       if (target().key !== identity) sync();
     }
-    async function apply() {
+    async function apply(model) {
       syncIdentityOnly();
-      const model = selected();
-      if (blockedReason() || operation || accepted || loading || !model || keyOf(model) === keyOf(state()?.modelSelection)) return;
+      if (blockedReason() || changing() || loading || !data || keyOf(model) === keyOf(state()?.modelSelection)) return;
       const capture = target();
       const current = state()?.modelSelection;
-      const warnings = [`Use ${labelOf(model)} for this session? Your conversation is kept; other sessions and Pi’s default model are unchanged.`];
+      // Switching is session-only and reversible. Ask only when it has a cost.
+      const warnings = [];
       if (current?.provider !== model.provider) warnings.push(`On your next message, Pi may send the existing conversation, including earlier images and tool results, to ${model.provider}.`);
       const previous = data.models.find((item) => keyOf(item) === keyOf(current));
       if (model.contextWindow && (model.contextWindow < previous?.contextWindow || data.contextTokens >= model.contextWindow)) warnings.push(`This model has a ${model.contextWindow.toLocaleString()} token context${data.contextTokens !== null ? `; the last estimate was ${data.contextTokens.toLocaleString()} tokens` : ''}. Pi may need to compact the conversation. Consider a new session for a much smaller model.`);
       if (hasImages() && !model.input?.includes('image')) warnings.push('Your unsent images will be kept, but this model cannot receive them. Remove them or choose an image-capable model before sending.');
-      if (!confirm(warnings.join('\n\n')) || !isCurrent(capture) || blockedReason()) return;
-      operation = capture; uncertain = undefined; accepted = undefined; acceptedState = undefined; setMessage(''); changed(); render();
+      if (warnings.length) {
+        const proceed = await confirm({ title: `Use ${model.name || model.id}?`, message: [`${labelOf(model)} replaces ${current ? labelOf(current) : 'the current model'} for this session only. The conversation is kept.`, ...warnings], confirm: 'Use model' });
+        if (!proceed || !isCurrent(capture) || blockedReason() || changing() || loading) return;
+      }
+      operation = model; uncertain = undefined; accepted = undefined; acceptedState = undefined; setMessage(''); changed(); renderList(); render();
       try {
         await request('model', { method: 'POST', handle: capture.handle, body: { sessionId: capture.sessionId, provider: model.provider, id: model.id, expectedModel: current } });
-        if (!isCurrent(capture) || operation !== capture) return;
+        if (!isCurrent(capture) || operation !== model) return;
         await refresh();
-        if (!isCurrent(capture) || operation !== capture) return;
+        if (!isCurrent(capture) || operation !== model) return;
         const confirmed = keyOf(state()?.modelSelection) === keyOf(model);
         accepted = confirmed ? undefined : model;
         acceptedState = confirmed ? undefined : state();
         setMessage(confirmed ? `Using ${labelOf(model)} for this session.` : 'Change accepted. Waiting for Pi’s state to confirm the active model.');
         notify(message);
       } catch (failure) {
-        if (!isCurrent(capture) || operation !== capture) return;
+        if (!isCurrent(capture) || operation !== model) return;
         // A timeout is not a rejection. Always read authority back; never retry
         // a POST automatically or claim the previous model is still active.
         await refresh();
-        if (!isCurrent(capture) || operation !== capture) return;
+        if (!isCurrent(capture) || operation !== model) return;
         const confirmed = keyOf(state()?.modelSelection) === keyOf(model);
         const pending = !confirmed && state()?.modelSwitching === true;
         uncertain = pending ? model : undefined;
         setMessage(confirmed ? `Pi confirms this session is using ${labelOf(model)}; the request acknowledgement was lost.` : pending ? 'Pi is still changing models. Waiting for its state to confirm; do not resend the request.' : `Model change not confirmed: ${failure.message} Refresh models and check the active model before retrying.`, !confirmed && !pending);
         notify(message, !confirmed && !pending);
       } finally {
-        if (isCurrent(capture) && operation === capture) { operation = undefined; chosen = state()?.modelSelection; renderChoices(); changed(); render(); }
+        if (isCurrent(capture) && operation === model) { operation = undefined; renderList(); changed(); render(); }
       }
     }
-    $('model-refresh').addEventListener('click', () => { void load(); });
-    $('model-filter').addEventListener('input', () => { chosen = selected() || chosen; renderChoices(); render(); });
-    $('model-choice').addEventListener('change', () => { chosen = selected(); setMessage(''); render(); });
-    $('model-apply').addEventListener('click', () => { void apply(); });
-    return { sync, open: load, get busy() { return Boolean(operation || accepted); } };
+    $('model-refresh').addEventListener('click', () => { data = undefined; void load(); });
+    $('model-filter').addEventListener('input', renderList);
+    return {
+      sync, open: load, reload: () => { if (!loading && !changing()) { data = undefined; void load(); } },
+      get busy() { return Boolean(operation || accepted); },
+      get loading() { return Boolean(loading); },
+      // For the context section: the last list response and the active model's limits.
+      get context() {
+        if (!data) return;
+        const active = data.models.find((model) => keyOf(model) === keyOf(state()?.modelSelection));
+        const window = active?.contextWindow || data.contextUsage?.contextWindow;
+        return { tokens: data.contextUsage ? data.contextUsage.tokens : data.contextTokens, contextWindow: window || null };
+      },
+    };
   }
   globalThis.PiVoiceModelPicker = Object.freeze({ create });
+})();
+
+;
+/* Thinking level and compaction for the selected session. Pi owns both; the
+ * app sends one explicit request and then reads Pi's state back. */
+(() => {
+  'use strict';
+  const levelNames = { off: 'Off', minimal: 'Minimal', low: 'Low', medium: 'Medium', high: 'High', xhigh: 'Extra high', max: 'Max' };
+  // Short enough for up to seven levels in one row; the full name is the label.
+  const shortNames = { off: 'Off', minimal: 'Min', low: 'Low', medium: 'Med', high: 'High', xhigh: 'XHigh', max: 'Max' };
+  const tokens = (count) => count >= 1e6 ? `${+(count / 1e6).toFixed(1)}M` : count >= 1000 ? `${Math.round(count / 1000)}K` : String(count);
+  function create({ element: $, createElement, request, target, state, context, thinkingBlocked, compactBlocked, changed, refresh, reloadContext, notify, confirm }) {
+    let identity;
+    let setting;
+    let compactRequest;
+    let watched;
+    let thinkingMessage = '';
+    let thinkingError = false;
+    let compactMessage = '';
+    let compactError = false;
+    const compacting = () => state()?.compaction?.status === 'running';
+    function renderThinking() {
+      const current = state();
+      const levels = Array.isArray(current?.thinkingLevels) ? current.thinkingLevels.filter((level) => levelNames[level]) : [];
+      const reason = thinkingBlocked();
+      $('thinking-section').hidden = !current || current.empty;
+      $('thinking-levels').hidden = !current?.thinkingSupported || levels.length < 2;
+      $('thinking-levels').replaceChildren(...levels.map((level) => {
+        const button = createElement('button');
+        button.className = 'segment';
+        button.dataset.level = level;
+        button.textContent = shortNames[level];
+        button.setAttribute('aria-label', levelNames[level]);
+        button.setAttribute('role', 'radio');
+        button.setAttribute('aria-checked', String(level === current.thinkingLevel));
+        button.disabled = Boolean(reason || setting);
+        button.addEventListener('click', () => { void choose(level); });
+        return button;
+      }));
+      $('thinking-status').textContent = thinkingError ? thinkingMessage
+        : !current?.thinkingSupported ? 'Restart this Pi after updating to choose a thinking level.'
+          : levels.length < 2 ? 'This model has no thinking levels.'
+            : setting ? 'Changing the thinking level…' : thinkingMessage || reason || 'More thinking is slower and uses more tokens. Applies to Pi’s next request in this session only.';
+      $('thinking-status').classList.toggle('error', thinkingError);
+    }
+    function renderContext() {
+      const current = state();
+      const usage = context();
+      $('context-section').hidden = !current || current.empty;
+      const percent = usage?.contextWindow && usage.tokens !== null && usage.tokens !== undefined ? Math.min(100, Math.round(usage.tokens / usage.contextWindow * 100)) : null;
+      // CSSOM, not a style attribute: the page's CSP blocks inline styles.
+      $('context-meter').style?.setProperty('--fill', `${percent ?? 0}%`);
+      $('context-meter').classList.toggle('high', percent !== null && percent >= 80);
+      $('context-usage').textContent = !usage ? 'Context use appears once Pi’s models are loaded.'
+        : percent === null ? `Unknown until Pi’s next reply${usage.contextWindow ? ` · ${tokens(usage.contextWindow)} context` : ''}`
+          : `${tokens(usage.tokens)} of ${tokens(usage.contextWindow)} tokens used · ${percent}%`;
+      const reason = compactBlocked();
+      $('compact').disabled = !current?.compactSupported || Boolean(reason || compactRequest || compacting());
+      $('compact-label').textContent = compacting() ? 'Compacting…' : 'Compact conversation';
+      $('compact-status').textContent = compactError ? compactMessage
+        : !current?.compactSupported ? 'Restart this Pi after updating to compact from the app.'
+          : compacting() ? 'Pi is summarizing earlier messages. Sending is paused until it finishes; Stop cancels it.'
+            : compactMessage || reason || 'Pi summarizes earlier messages so the conversation fits the model again. It also does this by itself when the context is nearly full.';
+      $('compact-status').classList.toggle('error', compactError);
+    }
+    function sync() {
+      const capture = target();
+      if (capture.key !== identity) {
+        identity = capture.key; setting = undefined; compactRequest = undefined; watched = undefined;
+        thinkingMessage = ''; thinkingError = false; compactMessage = ''; compactError = false;
+      }
+      // Report how a compaction ended only if this page saw it running.
+      const outcome = state()?.compaction;
+      if (outcome?.status === 'running') watched = true;
+      else if (watched && outcome) {
+        watched = undefined;
+        compactError = outcome.status === 'error';
+        compactMessage = outcome.status === 'done' ? `Conversation compacted${outcome.tokensBefore ? ` from about ${tokens(outcome.tokensBefore)} tokens` : ''}.`
+          : outcome.status === 'cancelled' ? 'Compaction stopped. The conversation is unchanged.' : `Could not compact: ${outcome.error || 'Pi reported an error.'}`;
+        notify(compactMessage, compactError);
+        reloadContext();
+      }
+      renderThinking();
+      renderContext();
+    }
+    async function choose(level) {
+      const current = state();
+      if (setting || thinkingBlocked() || level === current?.thinkingLevel) return;
+      const capture = target();
+      setting = level; thinkingMessage = ''; thinkingError = false; renderThinking();
+      try {
+        const result = await request('thinking', { method: 'POST', handle: capture.handle, body: { sessionId: capture.sessionId, level } });
+        if (target().key !== capture.key) return;
+        await refresh();
+        // Pi may clamp a level to what the model supports; show what it chose.
+        const chosen = result?.thinkingLevel || state()?.thinkingLevel;
+        thinkingMessage = chosen === level ? `Thinking level set to ${levelNames[level]} for this session.` : `Pi chose ${levelNames[chosen] || chosen} for this model.`;
+      } catch (failure) {
+        if (target().key !== capture.key) return;
+        thinkingError = true;
+        thinkingMessage = [404, 501].includes(failure.status) ? 'Update Pi Voice and restart its host and this Pi to choose a thinking level.' : failure.message;
+      } finally {
+        if (target().key === capture.key) { setting = undefined; changed(); }
+      }
+    }
+    async function compact() {
+      if (compactRequest || compactBlocked() || compacting() || !state()?.compactSupported) return;
+      const capture = target();
+      const proceed = await confirm({
+        title: 'Compact this conversation?',
+        message: ['Pi replaces earlier messages with a summary, so the model keeps the gist using less context. The full history stays saved in the session.', 'This makes one model request and can take a minute.'],
+        confirm: 'Compact',
+      });
+      if (!proceed || target().key !== capture.key || compactBlocked() || compacting()) return;
+      compactRequest = capture; compactMessage = ''; compactError = false; changed();
+      try {
+        await request('compact', { method: 'POST', handle: capture.handle, body: { sessionId: capture.sessionId } });
+        if (target().key !== capture.key) return;
+        watched = true;
+        await refresh();
+      } catch (failure) {
+        if (target().key !== capture.key) return;
+        compactError = true;
+        compactMessage = [404, 501].includes(failure.status) ? 'Update Pi Voice and restart its host and this Pi to compact from the app.' : failure.message;
+      } finally {
+        if (target().key === capture.key) { compactRequest = undefined; changed(); }
+      }
+    }
+    $('compact').addEventListener('click', () => { void compact(); });
+    return {
+      sync, compacting, get busy() { return Boolean(compactRequest || compacting()); },
+      // The composer chip is narrow: a short level name there, full names for screen readers.
+      label() {
+        const current = state();
+        const levels = current?.thinkingLevels || [];
+        const level = current?.thinkingSupported && levels.length > 1 ? current.thinkingLevel : undefined;
+        return { name: current?.modelName || current?.modelSelection?.id || 'Model', level: shortNames[level] || '', levelName: levelNames[level] || '' };
+      },
+    };
+  }
+  globalThis.PiVoiceSessionOptions = Object.freeze({ create });
 })();
 
 ;
@@ -438,7 +651,9 @@ globalThis.PiVoicePlayback = (() => {
       if (!sessionState.sessionsSupported) { notice('Restart Pi once to run sessions in parallel. Your conversation and draft are kept.', true); return; }
       // Always keep the current Pi: replacing an idle runtime made its conversation
       // disappear from Sessions, even though it was still saved on disk.
-      if (!confirm('Start a new session alongside this one? This one keeps running; switch back any time from Sessions. Your unsent draft and images stay in the composer.')) return;
+      const proceed = await confirm({ title: 'Start a new session?', message: 'It runs alongside this one, which keeps running; switch back any time from Sessions. Your unsent draft and images stay in the composer.', confirm: 'Start session' });
+      // The answer can take a while: check again that nothing else started.
+      if (!proceed || !app().connected || sessionStarting() || modelChanging() || sessionState.spawnRequest || sessionState.switchPending || app().sending || app().listening || app().preparingImages) return;
       const request = { id: crypto.randomUUID(), deadline: Date.now() + 45000 };
       sessionState.spawnRequest = request;
       notice('Starting a new session…');
@@ -495,7 +710,7 @@ globalThis.PiVoicePlayback = (() => {
       selectTarget(target.handle, true);
       // Never leave an unrelated reply visible while the notification is loading.
       clearState();
-      for (const name of ['sessions', 'activity', 'history', 'settings']) $(`${name}-dialog`).close();
+      for (const name of ['sessions', 'activity', 'history', 'settings', 'model', 'confirm']) $(`${name}-dialog`).close();
       notice('Opening the notified conversation…');
       void poll();
     }
@@ -595,7 +810,7 @@ globalThis.PiVoicePlayback = (() => {
     }
     async function closeSession(item) {
       const working = item.busy || item.pending ? 'Pi is still working there; its task will stop. ' : '';
-      if (!confirm(`Close “${item.title || 'this session'}”? ${working}The conversation stays saved in Pi.`)) return;
+      if (!await confirm({ title: `Close “${item.title || 'this session'}”?`, message: `${working}The conversation stays saved in Pi.`, confirm: 'Close session', danger: true })) return;
       try {
         await api('session/close', { method: 'POST', body: { sessionId: item.sessionId, instanceId: item.instanceId }, handle: item.handle });
         await pollSessions();
@@ -765,10 +980,12 @@ let activityData;
 let activitySupported = true;
 let activityPolling = false;
 const expandedSteps = new Set();
+const dialogs = globalThis.PiVoiceDialogs.create({ element: $, createElement: (tag) => document.createElement(tag) });
+const ask = (options) => dialogs.ask(options);
 const sessionsController = globalThis.PiVoiceSessions.create({
   element: $, api, app: () => ({ connected, sending, listening, preparingImages }),
-  controls, poll: () => poll(), notice, haptic, confirm: (text) => confirm(text),
-  currentHandle: () => currentHandle(), sessionStarting: () => sessionStarting(), modelChanging: () => modelChanging(),
+  controls, poll: () => poll(), notice, haptic, confirm: ask,
+  currentHandle: () => currentHandle(), sessionStarting: () => sessionStarting(), modelChanging: () => modelChanging() || sessionOptions.busy,
   folder: (path) => folder(path), replyArrived,
   notificationHandled: (...args) => window.PiVoiceAndroid?.notificationHandled?.(...args),
   clearState: () => { state = undefined; },
@@ -800,7 +1017,13 @@ const imageLimits = globalThis.PiVoiceImageLimits;
 const sessionStarting = () => state?.newSessionAction?.status === 'starting';
 const SpeechRecognition = globalThis.PiVoiceNativeRecognition || window.SpeechRecognition || window.webkitSpeechRecognition;
 $('language').value = storage.get('language') || navigator.language || 'en-US';
-$('engine').value = storage.get('engine') || (SpeechRecognition ? 'browser' : 'termux');
+let engine;
+function setEngine(value) {
+  engine = value === 'termux' ? 'termux' : 'browser';
+  $('engine-browser').setAttribute('aria-checked', String(engine === 'browser'));
+  $('engine-termux').setAttribute('aria-checked', String(engine === 'termux'));
+}
+setEngine(storage.get('engine') || (SpeechRecognition ? 'browser' : 'termux'));
 $('awake').checked = storage.get('awake') !== 'false';
 $('read-language').value = storage.get('read-language') || navigator.language || 'en-US';
 for (const id of ['notify', 'sound', 'haptics']) $(id).checked = storage.get(id) !== 'false';
@@ -874,7 +1097,8 @@ window.__piVoiceRestorePreferences = (values) => {
     if (typeof value !== 'string' || value.length > 128) continue;
     try { localStorage.setItem(`pi-voice-${key}`, value); } catch {}
     if (booleans.includes(key)) $(key).checked = value === 'true';
-    if (strings.includes(key)) $(key).value = value;
+    if (key === 'engine') setEngine(value);
+    else if (strings.includes(key)) $(key).value = value;
   }
   syncAlerts(); controls();
 };
@@ -903,20 +1127,36 @@ const modelPicker = globalThis.PiVoiceModelPicker.create({
   blockedReason: () => !sessionReady() ? 'Connect a ready Pi session before changing models.'
     : state.modelSwitching ? 'A model change is in progress. Wait for Pi to confirm it.'
       : sessionStarting() || sessionState.spawnRequest ? 'Wait for the new session to be ready.'
-        : busyHere() || sending ? 'Finish or stop the current task before changing models.'
-          : listening || preparingImages ? 'Finish recording or preparing images before changing models.' : '',
-  changed: controls, refresh: () => poll({ fresh: true }), notify: notice, confirm: (text) => confirm(text), hasImages: () => attachments.length > 0,
+        : sessionOptions.busy ? 'Wait for Pi to finish compacting.'
+          : busyHere() || sending ? 'Finish or stop the current task before changing models.'
+            : listening || preparingImages ? 'Finish recording or preparing images before changing models.' : '',
+  changed: controls, refresh: () => poll({ fresh: true }), notify: notice, confirm: ask, hasImages: () => attachments.length > 0,
 });
 const modelChanging = () => Boolean(state?.modelSwitching || modelPicker.busy);
+const sessionOptions = globalThis.PiVoiceSessionOptions.create({
+  element: $, createElement: (tag) => document.createElement(tag), request: api,
+  target: () => ({ key: JSON.stringify([sessionState.selectionVersion, sessionState.targetHandle, state?.instanceId, state?.sessionId]), handle: state?.handle, sessionId: state?.sessionId }),
+  state: () => state, context: () => modelPicker.context,
+  // A thinking level applies to Pi's next request, so it may change mid-task.
+  thinkingBlocked: () => !sessionReady() ? 'Connect a ready Pi session first.'
+    : modelChanging() ? 'Wait for the model change to finish.'
+      : sessionStarting() || sessionState.spawnRequest ? 'Wait for the new session to be ready.'
+        : sessionOptions.busy ? 'Wait for Pi to finish compacting.' : '',
+  compactBlocked: () => !sessionReady() ? 'Connect a ready Pi session first.'
+    : modelChanging() ? 'Wait for the model change to finish.'
+      : sessionStarting() || sessionState.spawnRequest ? 'Wait for the new session to be ready.'
+        : busyHere() || sending ? 'Finish or stop the current task before compacting.' : '',
+  changed: controls, refresh: () => poll({ fresh: true }), reloadContext: () => modelPicker.reload(), notify: notice, confirm: ask,
+});
 const folder = (path) => String(path || '').split('/').filter(Boolean).at(-1) || path || '';
 function header() {
-  const working = connected && (busyHere() || sending || modelChanging());
+  const working = connected && (busyHere() || sending || modelChanging() || sessionOptions.compacting());
   const dot = $('status-dot');
   dot.classList.toggle('ready', connected && !working);
   dot.classList.toggle('working', working);
   dot.classList.toggle('offline', !connected);
   setText('session-title', state?.title || (state?.sessionName && state.sessionName !== 'Pi session' ? state.sessionName : 'Pi Voice'));
-  if (connected) setText('connection', [state?.empty ? 'Connected · No active conversation' : working ? 'Working' : 'Ready', folder(state?.cwd)].filter(Boolean).join(' · '));
+  if (connected) setText('connection', [state?.empty ? 'Connected · No active conversation' : sessionOptions.compacting() ? 'Compacting' : working ? 'Working' : 'Ready', folder(state?.cwd)].filter(Boolean).join(' · '));
   const others = sessionState.sessions.filter((item) => item.handle !== currentHandle());
   const fresh = others.some((item) => sessionState.unread.has(item.handle));
   $('sessions-badge').hidden = !others.length;
@@ -945,9 +1185,12 @@ function versions() {
 function controls() {
   openNotificationWhenReady();
   modelPicker.sync();
+  sessionOptions.sync();
   const starting = sessionStarting() || Boolean(sessionState.spawnRequest) || sessionState.switchPending;
   const switching = starting || modelChanging();
-  $('new-session').disabled = !connected || switching || sending || listening || preparingImages;
+  // Compaction pauses sending, not typing, recording or attaching.
+  const compacting = sessionOptions.busy;
+  $('new-session').disabled = !connected || switching || compacting || sending || listening || preparingImages;
   $('sessions-new').disabled = $('new-session').disabled;
   $('new-session').classList.toggle('busy', starting);
   setText('new-session-label', starting ? 'Starting…' : 'New');
@@ -955,20 +1198,28 @@ function controls() {
   $('prompt-box').classList.toggle('has-draft', hasDraft);
   $('prompt-box').classList.toggle('listening', listening);
   $('clear').hidden = !hasDraft || listening;
-  $('listening').classList.toggle('subtle', !listening && !attachments.length);
+  $('listening').classList.toggle('subtle', !listening);
+  $('open-model').hidden = listening || !sessionReady();
+  const chip = sessionOptions.label();
+  setText('model-chip-label', chip.name);
+  setText('model-chip-level', chip.level);
+  $('model-chip-level').hidden = !chip.level;
+  $('open-model').setAttribute('aria-label', `Model: ${chip.name}${chip.levelName ? `, thinking level ${chip.levelName}` : ''}`);
+  $('settings-model').disabled = !sessionReady();
   $('listening').classList.toggle('live', listening);
   header();
   versions();
   $('reconnect').hidden = !offline || !canReconnect();
   $('restore-banner').hidden = (!connected && !sessionState.notificationTarget) || !sessionState.stopped.length;
   setText('restore-label', `${sessionState.stopped.length} earlier session${sessionState.stopped.length === 1 ? '' : 's'} stopped · Restore`);
-  $('send').disabled = switching || !sessionReady() || sending || listening || preparingImages || (attachments.length > 0 && state?.modelSupportsImages === false) || (!$('draft').value.trim() && !attachments.length);
+  $('send').disabled = switching || compacting || !sessionReady() || sending || listening || preparingImages || (attachments.length > 0 && state?.modelSupportsImages === false) || (!$('draft').value.trim() && !attachments.length);
   $('attach').disabled = switching || !sessionReady() || sending || listening || preparingImages;
   $('image-input').disabled = $('attach').disabled;
   for (const button of attachmentButtons) button.disabled = switching || sending || listening || preparingImages;
   $('microphone').disabled = switching || sending || preparingImages || (!sessionReady() && !listening);
   $('clear').disabled = switching || sending || listening || preparingImages;
-  $('engine').disabled = listening;
+  $('engine-browser').disabled = listening;
+  $('engine-termux').disabled = listening;
   $('language').disabled = listening;
   $('draft').readOnly = switching || listening || sending || preparingImages;
   $('microphone').setAttribute('aria-pressed', String(listening));
@@ -978,7 +1229,7 @@ function controls() {
   $('draft').placeholder = listening ? 'Listening…' : 'Ask Pi anything…';
   $('microphone').classList.toggle('active', listening);
   if (!listening) setText('listening', speechHint());
-  const working = Boolean(connected && (state?.busy || state?.pending || sending || optimisticQuestion));
+  const working = Boolean(connected && (state?.busy || state?.pending || sending || optimisticQuestion || sessionOptions.compacting()));
   $('thinking').hidden = !working;
   setText('thinking-label', activityLabel());
   $('thinking').classList.toggle('waiting', Boolean(state?.activity?.prompt) && !sending);
@@ -994,6 +1245,7 @@ function controls() {
 }
 function activityLabel() {
   if (sending) return 'Sending…';
+  if (sessionOptions.compacting()) return 'Compacting the conversation…';
   const now = state?.activity;
   if (now?.prompt) return `Waiting for you in Termux${now.prompt.title ? `: ${now.prompt.title}` : ''}`;
   if (state?.pending) return 'Follow-up queued';
@@ -1091,12 +1343,13 @@ function terminalControls() {
   $('open-terminal').disabled = !connected || sessionState.switchPending || !session || !capable;
   setText('terminal-hint', hint);
 }
-function openTerminal() {
+async function openTerminal() {
   const session = terminalSession();
   const bridge = window.PiVoiceAndroid;
   if (connected && !sessionState.switchPending && session && typeof bridge?.openTerminal === 'function') {
     if (storage.get('terminal-warned') !== 'true') {
-      if (!confirm('Termux will show Pi’s live terminal. Keys go straight to Pi: Ctrl+C or Ctrl+D would stop it. Press Ctrl+B then D to leave it running.')) return;
+      if (!await ask({ title: 'Open Pi’s terminal?', message: 'Termux will show Pi’s live terminal. Keys go straight to Pi: Ctrl+C or Ctrl+D would stop it. Press Ctrl+B then D to leave it running.', confirm: 'Open terminal' })) return;
+      if (terminalSession() !== session || !connected || sessionState.switchPending) return;
       storage.set('terminal-warned', 'true');
     }
     cancelRecording();
@@ -1436,7 +1689,7 @@ const poll = globalThis.PiVoicePolling.create({
 });
 async function send() {
   const text = $('draft').value.trim();
-  if ((!text && !attachments.length) || !sessionReady() || sending || listening || preparingImages || sessionStarting() || modelChanging()) return;
+  if ((!text && !attachments.length) || !sessionReady() || sending || listening || preparingImages || sessionStarting() || modelChanging() || sessionOptions.busy) return;
   if (attachments.length && imageSupportError()) { notice(imageSupportError(), true); return; }
   if (text.length > 16000) { notice('Message is too long (maximum 16000 characters).', true); return; }
   // Reuse the ID on a manual retry: a lost HTTP response must not duplicate a prompt.
@@ -1509,7 +1762,7 @@ async function startSpeech() {
       notice(attachments.length ? 'Transcript and images ready. Review them, then tap Send.' : 'Transcript ready. Review it, then tap Send to Pi.');
     } else if (!error) notice('No speech detected. Try again.', true);
   };
-  if ($('engine').value === 'browser') {
+  if (engine === 'browser') {
     if (!SpeechRecognition) {
       error = true;
       notice('Speech recognition is unavailable. Use the Termux:API engine in Settings or your keyboard’s microphone.', true);
@@ -1573,7 +1826,7 @@ $('image-input').addEventListener('change', () => {
   void addImages(files);
 });
 $('stop-host').addEventListener('click', async () => {
-  if (!confirm('Stop the Pi Voice service? Reconnect starts it again.')) return;
+  if (!await ask({ title: 'Stop the Pi Voice service?', message: 'No session is running. Reconnect starts the service again.', confirm: 'Stop service', danger: true })) return;
   try { await api('host/stop', { method: 'POST', body: {}, handle: null }); connected = false; offline = true; notice('Pi Voice service stopped.'); controls(); }
   catch (error) { notice(error.message, true); }
 });
@@ -1589,7 +1842,11 @@ $('draft').addEventListener('input', controls);
 $('clear').addEventListener('click', () => { $('draft').value = ''; setAttachments([]); controls(); });
 $('abort').addEventListener('click', async () => {
   const sessionId = state?.sessionId;
-  if (!connected || !sessionId || !confirm('Stop Pi’s current task? Already completed actions cannot be undone.')) return;
+  if (!connected || !sessionId) return;
+  const question = sessionOptions.compacting()
+    ? { title: 'Stop compacting?', message: 'The conversation stays as it was.', confirm: 'Stop', danger: true }
+    : { title: 'Stop Pi’s current task?', message: 'Already completed actions cannot be undone.', confirm: 'Stop task', danger: true };
+  if (!await ask(question) || !connected || state?.sessionId !== sessionId) return;
   try { await api('abort', { method: 'POST', body: { sessionId } }); optimisticQuestion = undefined; notice('Stop requested.'); haptic('tap'); await poll(); }
   catch (err) { notice(err.message, true); }
 });
@@ -1610,22 +1867,27 @@ window.__piVoiceOpenSession = (handle, sessionId = '') => {
   return true; // Accepted, not yet opened: Android waits for notificationHandled.
 };
 document.addEventListener('pointerdown', unlockAudio, { capture: true });
-for (const id of ['engine', 'language']) {
-  $(id).addEventListener('change', () => {
-    storage.set(id, $(id).value);
-    if (!listening) $('listening').textContent = speechHint();
+$('language').addEventListener('change', () => {
+  storage.set('language', $('language').value);
+  controls();
+});
+for (const value of ['browser', 'termux']) {
+  $(`engine-${value}`).addEventListener('click', () => {
+    if (listening) return;
+    setEngine(value);
+    storage.set('engine', value);
     controls();
   });
 }
 $('awake').addEventListener('change', () => { storage.set('awake', String($('awake').checked)); void syncWakeLock(); });
-for (const name of ['sessions', 'activity', 'history', 'settings']) {
+for (const name of ['sessions', 'activity', 'history', 'settings', 'model']) {
   const dialog = $(`${name}-dialog`);
   $(`open-${name}`).addEventListener('click', () => {
     if (name === 'history') renderMessages(state?.messages || []);
     if (name === 'sessions') { renderSessions(); void pollSessions(); }
     if (name === 'activity') { renderActivity(); void pollActivity(); }
     dialog.showModal();
-    if (name === 'settings') void modelPicker.open();
+    if (name === 'model') { controls(); void modelPicker.open(); }
   });
   $(`close-${name}`).addEventListener('click', () => dialog.close());
   dialog.addEventListener('click', (event) => { if (event.target === dialog) dialog.close(); });
@@ -1643,7 +1905,7 @@ window.addEventListener?.('pagehide', () => playback.stop());
 const pullThreshold = 64;
 const pull = { start: undefined, distance: 0, active: false };
 let refreshing = false;
-const sheetOpen = () => ['sessions', 'activity', 'history', 'settings'].some((name) => $(`${name}-dialog`).open);
+const sheetOpen = () => ['sessions', 'activity', 'history', 'settings', 'model', 'confirm'].some((name) => $(`${name}-dialog`).open);
 const atTop = () => !($('latest-answer').scrollTop > 0) && !($('latest-question').scrollTop > 0);
 function showPull(distance, settle = false) {
   const indicator = $('pull-indicator');
@@ -1707,7 +1969,8 @@ $('exchange').addEventListener('touchcancel', () => { pull.active = false; endPu
 $('thinking').addEventListener('click', () => $('open-activity').click());
 $('reconnect').addEventListener('click', reconnect);
 $('restore-banner').addEventListener('click', () => $('open-sessions').click());
-$('open-terminal').addEventListener('click', openTerminal);
+$('open-terminal').addEventListener('click', () => { void openTerminal(); });
+$('settings-model').addEventListener('click', () => { $('settings-dialog').close(); $('open-model').click(); });
 $('sessions-new').addEventListener('click', () => { $('sessions-dialog').close(); void startNewSession(); });
 setInterval(() => {
   if (document.hidden) return;

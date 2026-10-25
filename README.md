@@ -25,7 +25,7 @@ Pi Voice gives that agent a real app: **tap the icon → speak → review the tr
 - **Live activity:** see the tool Pi is running, its output and the reply being written, and jump to Pi's terminal in Termux.
 - **Parallel sessions:** start a new conversation while Pi is still working, and switch between running sessions.
 - **Picks up where you left off:** if the phone or Android stops Pi, the host can reopen saved conversations; surviving Pi processes are reattached without being restarted.
-- **Models:** choose a configured local or cloud model for the current session, without changing other sessions or Pi's default.
+- **Model, thinking and context:** switch the session's model, set Pi's thinking level, see how full the context is and compact the conversation, all without changing other sessions or Pi's defaults.
 - **Images:** attach up to four screenshots or photos for vision-capable models.
 - **Read aloud:** listen to a finished reply on request.
 - **Know when Pi is done:** a chime and a light vibration when a reply arrives, and a notification when the app is in the background.
@@ -107,13 +107,19 @@ Up to 4 sessions can run at once. Each is a full Pi process with its own memory 
 
 Closing one session leaves the host and other sessions running. Closing the last shows a connected empty screen with **New session**. **Sessions → Stop Pi Voice service** stops the empty host; Reconnect starts it again. Intentional closures are not reopened automatically. Closing a busy session stops its task and shows Closing until its process exits; a timeout is reported instead of pretending it closed.
 
-### Changing models
+### Model, thinking level and context
 
-Open **Settings → Connected Pi**, filter by model name, ID or provider, choose a model, then tap **Use model** and confirm. The list comes from that Pi process's configured, authenticated model registry, including compatible local providers. **Refresh models** reads that registry again; it does not configure providers or necessarily reload Pi's configuration files.
+The chip next to the microphone shows the session's model and thinking level. Tap it (or **Settings → Model, thinking & context**) to open the **Model** sheet. Everything there applies to **this Pi session only**; set up providers, keys and defaults in Pi itself.
+
+- **Thinking level:** Pi's levels for the current model, from Off to the highest it supports. A change applies to Pi's next request, so you can raise it while Pi works on something. Models without thinking show none.
+- **Context:** how much of the model's context window the conversation uses. **Compact conversation** asks Pi to summarize earlier messages, the same as `/compact` in Pi. It runs only while Pi is idle, sending waits until it finishes (you can keep typing), and **Stop** cancels it. Pi also compacts by itself when the context is nearly full.
+- **Model:** tap a model to use it. Pi's scoped models (its Ctrl+P cycle) are listed first, then the rest by provider. The list comes from that Pi process's configured, authenticated model registry, including compatible local providers. The refresh button reads that registry again; it does not configure providers or necessarily reload Pi's configuration files.
+
+Changing the model:
 
 - The change affects **only this Pi session**. Its conversation, your unsent draft and images, other Pi processes, and Pi's default model are kept. A selection made in Pi's terminal is reflected in the app too.
 - Finish or stop the current task and finish recording/preparing images first. Sending, recording and starting a session are disabled while the app waits for a model change. Stale process, conversation and previous-model selections are rejected rather than applied to another target.
-- Changing providers can send the **existing conversation**, including earlier images and tool results, to the new provider on your next message. The confirmation warns about this, a smaller context window, and unsent images when the new model is text-only. Images are never silently removed; remove them or switch back to an image-capable model before sending.
+- A model from the same provider is used right away. Changing providers can send the **existing conversation**, including earlier images and tool results, to the new provider on your next message, so the app asks first. It also asks before a smaller context window, or when unsent images cannot go to a text-only model. Images are never silently removed; remove them or switch back to an image-capable model before sending.
 - A listed model is configured, **not necessarily reachable**. Pi remains responsible for authentication, tool calls and provider compatibility. Local servers must already be running. Pi Voice does not download/load models, start inference servers or fall back to a cloud provider.
 - A timeout is not proof of failure. The app reads Pi's active selection back and never automatically retries a model change. Check the displayed current model before trying again.
 
@@ -168,7 +174,7 @@ Notifications come from the Pi extension in Termux, which tells the app when a r
 - **Voice output:** the read-aloud language, for example `en-US` or `de-DE`. Install matching voices in Android's text-to-speech settings.
 - **Replies & feedback:** reply notifications, the reply chime and haptic feedback.
 - **Keep Pi available:** the Termux wake lock (see below).
-- **Connected Pi:** the session, folder, active model and session-scoped model picker.
+- **Connected Pi:** the session, folder and active model, with a shortcut to the Model sheet.
 - **About:** the Pi Voice and Pi versions of the connected session, with a note if it still runs an older Pi Voice backend.
 
 ## Keeping Pi running
@@ -248,6 +254,8 @@ To rotate the token, quit all Pi instances and stop the Pi Voice service, then d
 | `bridge.mjs` | One worker's Pi API and Termux:API speech fallback. |
 | `models.mjs` | Session-scoped Pi model-registry adapter, safe public metadata, validation and single-flight selection. |
 | `src/model-picker.js` | Provider-independent model-picker UI; no provider requests or runtime management. |
+| `src/session-options.js` | Thinking-level and compaction controls of the Model sheet. |
+| `src/dialogs.js` | The app's own confirmation dialog, used instead of Android's native one. |
 | `transport.mjs`, `config.mjs`, `storage.mjs` | Shared HTTP boundary, authentication/configuration, and atomic persistence. |
 | `discovery.mjs` | Finds running bridges from private endpoint records. |
 | `running.mjs` | Records which conversations are open, for restoring them after Pi stops. |

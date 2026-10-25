@@ -37,10 +37,12 @@ let activityData;
 let activitySupported = true;
 let activityPolling = false;
 const expandedSteps = new Set();
+const dialogs = globalThis.PiVoiceDialogs.create({ element: $, createElement: (tag) => document.createElement(tag) });
+const ask = (options) => dialogs.ask(options);
 const sessionsController = globalThis.PiVoiceSessions.create({
   element: $, api, app: () => ({ connected, sending, listening, preparingImages }),
-  controls, poll: () => poll(), notice, haptic, confirm: (text) => confirm(text),
-  currentHandle: () => currentHandle(), sessionStarting: () => sessionStarting(), modelChanging: () => modelChanging(),
+  controls, poll: () => poll(), notice, haptic, confirm: ask,
+  currentHandle: () => currentHandle(), sessionStarting: () => sessionStarting(), modelChanging: () => modelChanging() || sessionOptions.busy,
   folder: (path) => folder(path), replyArrived,
   notificationHandled: (...args) => window.PiVoiceAndroid?.notificationHandled?.(...args),
   clearState: () => { state = undefined; },
@@ -72,7 +74,13 @@ const imageLimits = globalThis.PiVoiceImageLimits;
 const sessionStarting = () => state?.newSessionAction?.status === 'starting';
 const SpeechRecognition = globalThis.PiVoiceNativeRecognition || window.SpeechRecognition || window.webkitSpeechRecognition;
 $('language').value = storage.get('language') || navigator.language || 'en-US';
-$('engine').value = storage.get('engine') || (SpeechRecognition ? 'browser' : 'termux');
+let engine;
+function setEngine(value) {
+  engine = value === 'termux' ? 'termux' : 'browser';
+  $('engine-browser').setAttribute('aria-checked', String(engine === 'browser'));
+  $('engine-termux').setAttribute('aria-checked', String(engine === 'termux'));
+}
+setEngine(storage.get('engine') || (SpeechRecognition ? 'browser' : 'termux'));
 $('awake').checked = storage.get('awake') !== 'false';
 $('read-language').value = storage.get('read-language') || navigator.language || 'en-US';
 for (const id of ['notify', 'sound', 'haptics']) $(id).checked = storage.get(id) !== 'false';
@@ -146,7 +154,8 @@ window.__piVoiceRestorePreferences = (values) => {
     if (typeof value !== 'string' || value.length > 128) continue;
     try { localStorage.setItem(`pi-voice-${key}`, value); } catch {}
     if (booleans.includes(key)) $(key).checked = value === 'true';
-    if (strings.includes(key)) $(key).value = value;
+    if (key === 'engine') setEngine(value);
+    else if (strings.includes(key)) $(key).value = value;
   }
   syncAlerts(); controls();
 };
@@ -175,20 +184,36 @@ const modelPicker = globalThis.PiVoiceModelPicker.create({
   blockedReason: () => !sessionReady() ? 'Connect a ready Pi session before changing models.'
     : state.modelSwitching ? 'A model change is in progress. Wait for Pi to confirm it.'
       : sessionStarting() || sessionState.spawnRequest ? 'Wait for the new session to be ready.'
-        : busyHere() || sending ? 'Finish or stop the current task before changing models.'
-          : listening || preparingImages ? 'Finish recording or preparing images before changing models.' : '',
-  changed: controls, refresh: () => poll({ fresh: true }), notify: notice, confirm: (text) => confirm(text), hasImages: () => attachments.length > 0,
+        : sessionOptions.busy ? 'Wait for Pi to finish compacting.'
+          : busyHere() || sending ? 'Finish or stop the current task before changing models.'
+            : listening || preparingImages ? 'Finish recording or preparing images before changing models.' : '',
+  changed: controls, refresh: () => poll({ fresh: true }), notify: notice, confirm: ask, hasImages: () => attachments.length > 0,
 });
 const modelChanging = () => Boolean(state?.modelSwitching || modelPicker.busy);
+const sessionOptions = globalThis.PiVoiceSessionOptions.create({
+  element: $, createElement: (tag) => document.createElement(tag), request: api,
+  target: () => ({ key: JSON.stringify([sessionState.selectionVersion, sessionState.targetHandle, state?.instanceId, state?.sessionId]), handle: state?.handle, sessionId: state?.sessionId }),
+  state: () => state, context: () => modelPicker.context,
+  // A thinking level applies to Pi's next request, so it may change mid-task.
+  thinkingBlocked: () => !sessionReady() ? 'Connect a ready Pi session first.'
+    : modelChanging() ? 'Wait for the model change to finish.'
+      : sessionStarting() || sessionState.spawnRequest ? 'Wait for the new session to be ready.'
+        : sessionOptions.busy ? 'Wait for Pi to finish compacting.' : '',
+  compactBlocked: () => !sessionReady() ? 'Connect a ready Pi session first.'
+    : modelChanging() ? 'Wait for the model change to finish.'
+      : sessionStarting() || sessionState.spawnRequest ? 'Wait for the new session to be ready.'
+        : busyHere() || sending ? 'Finish or stop the current task before compacting.' : '',
+  changed: controls, refresh: () => poll({ fresh: true }), reloadContext: () => modelPicker.reload(), notify: notice, confirm: ask,
+});
 const folder = (path) => String(path || '').split('/').filter(Boolean).at(-1) || path || '';
 function header() {
-  const working = connected && (busyHere() || sending || modelChanging());
+  const working = connected && (busyHere() || sending || modelChanging() || sessionOptions.compacting());
   const dot = $('status-dot');
   dot.classList.toggle('ready', connected && !working);
   dot.classList.toggle('working', working);
   dot.classList.toggle('offline', !connected);
   setText('session-title', state?.title || (state?.sessionName && state.sessionName !== 'Pi session' ? state.sessionName : 'Pi Voice'));
-  if (connected) setText('connection', [state?.empty ? 'Connected · No active conversation' : working ? 'Working' : 'Ready', folder(state?.cwd)].filter(Boolean).join(' · '));
+  if (connected) setText('connection', [state?.empty ? 'Connected · No active conversation' : sessionOptions.compacting() ? 'Compacting' : working ? 'Working' : 'Ready', folder(state?.cwd)].filter(Boolean).join(' · '));
   const others = sessionState.sessions.filter((item) => item.handle !== currentHandle());
   const fresh = others.some((item) => sessionState.unread.has(item.handle));
   $('sessions-badge').hidden = !others.length;
@@ -217,9 +242,12 @@ function versions() {
 function controls() {
   openNotificationWhenReady();
   modelPicker.sync();
+  sessionOptions.sync();
   const starting = sessionStarting() || Boolean(sessionState.spawnRequest) || sessionState.switchPending;
   const switching = starting || modelChanging();
-  $('new-session').disabled = !connected || switching || sending || listening || preparingImages;
+  // Compaction pauses sending, not typing, recording or attaching.
+  const compacting = sessionOptions.busy;
+  $('new-session').disabled = !connected || switching || compacting || sending || listening || preparingImages;
   $('sessions-new').disabled = $('new-session').disabled;
   $('new-session').classList.toggle('busy', starting);
   setText('new-session-label', starting ? 'Starting…' : 'New');
@@ -227,20 +255,28 @@ function controls() {
   $('prompt-box').classList.toggle('has-draft', hasDraft);
   $('prompt-box').classList.toggle('listening', listening);
   $('clear').hidden = !hasDraft || listening;
-  $('listening').classList.toggle('subtle', !listening && !attachments.length);
+  $('listening').classList.toggle('subtle', !listening);
+  $('open-model').hidden = listening || !sessionReady();
+  const chip = sessionOptions.label();
+  setText('model-chip-label', chip.name);
+  setText('model-chip-level', chip.level);
+  $('model-chip-level').hidden = !chip.level;
+  $('open-model').setAttribute('aria-label', `Model: ${chip.name}${chip.levelName ? `, thinking level ${chip.levelName}` : ''}`);
+  $('settings-model').disabled = !sessionReady();
   $('listening').classList.toggle('live', listening);
   header();
   versions();
   $('reconnect').hidden = !offline || !canReconnect();
   $('restore-banner').hidden = (!connected && !sessionState.notificationTarget) || !sessionState.stopped.length;
   setText('restore-label', `${sessionState.stopped.length} earlier session${sessionState.stopped.length === 1 ? '' : 's'} stopped · Restore`);
-  $('send').disabled = switching || !sessionReady() || sending || listening || preparingImages || (attachments.length > 0 && state?.modelSupportsImages === false) || (!$('draft').value.trim() && !attachments.length);
+  $('send').disabled = switching || compacting || !sessionReady() || sending || listening || preparingImages || (attachments.length > 0 && state?.modelSupportsImages === false) || (!$('draft').value.trim() && !attachments.length);
   $('attach').disabled = switching || !sessionReady() || sending || listening || preparingImages;
   $('image-input').disabled = $('attach').disabled;
   for (const button of attachmentButtons) button.disabled = switching || sending || listening || preparingImages;
   $('microphone').disabled = switching || sending || preparingImages || (!sessionReady() && !listening);
   $('clear').disabled = switching || sending || listening || preparingImages;
-  $('engine').disabled = listening;
+  $('engine-browser').disabled = listening;
+  $('engine-termux').disabled = listening;
   $('language').disabled = listening;
   $('draft').readOnly = switching || listening || sending || preparingImages;
   $('microphone').setAttribute('aria-pressed', String(listening));
@@ -250,7 +286,7 @@ function controls() {
   $('draft').placeholder = listening ? 'Listening…' : 'Ask Pi anything…';
   $('microphone').classList.toggle('active', listening);
   if (!listening) setText('listening', speechHint());
-  const working = Boolean(connected && (state?.busy || state?.pending || sending || optimisticQuestion));
+  const working = Boolean(connected && (state?.busy || state?.pending || sending || optimisticQuestion || sessionOptions.compacting()));
   $('thinking').hidden = !working;
   setText('thinking-label', activityLabel());
   $('thinking').classList.toggle('waiting', Boolean(state?.activity?.prompt) && !sending);
@@ -266,6 +302,7 @@ function controls() {
 }
 function activityLabel() {
   if (sending) return 'Sending…';
+  if (sessionOptions.compacting()) return 'Compacting the conversation…';
   const now = state?.activity;
   if (now?.prompt) return `Waiting for you in Termux${now.prompt.title ? `: ${now.prompt.title}` : ''}`;
   if (state?.pending) return 'Follow-up queued';
@@ -363,12 +400,13 @@ function terminalControls() {
   $('open-terminal').disabled = !connected || sessionState.switchPending || !session || !capable;
   setText('terminal-hint', hint);
 }
-function openTerminal() {
+async function openTerminal() {
   const session = terminalSession();
   const bridge = window.PiVoiceAndroid;
   if (connected && !sessionState.switchPending && session && typeof bridge?.openTerminal === 'function') {
     if (storage.get('terminal-warned') !== 'true') {
-      if (!confirm('Termux will show Pi’s live terminal. Keys go straight to Pi: Ctrl+C or Ctrl+D would stop it. Press Ctrl+B then D to leave it running.')) return;
+      if (!await ask({ title: 'Open Pi’s terminal?', message: 'Termux will show Pi’s live terminal. Keys go straight to Pi: Ctrl+C or Ctrl+D would stop it. Press Ctrl+B then D to leave it running.', confirm: 'Open terminal' })) return;
+      if (terminalSession() !== session || !connected || sessionState.switchPending) return;
       storage.set('terminal-warned', 'true');
     }
     cancelRecording();
@@ -708,7 +746,7 @@ const poll = globalThis.PiVoicePolling.create({
 });
 async function send() {
   const text = $('draft').value.trim();
-  if ((!text && !attachments.length) || !sessionReady() || sending || listening || preparingImages || sessionStarting() || modelChanging()) return;
+  if ((!text && !attachments.length) || !sessionReady() || sending || listening || preparingImages || sessionStarting() || modelChanging() || sessionOptions.busy) return;
   if (attachments.length && imageSupportError()) { notice(imageSupportError(), true); return; }
   if (text.length > 16000) { notice('Message is too long (maximum 16000 characters).', true); return; }
   // Reuse the ID on a manual retry: a lost HTTP response must not duplicate a prompt.
@@ -781,7 +819,7 @@ async function startSpeech() {
       notice(attachments.length ? 'Transcript and images ready. Review them, then tap Send.' : 'Transcript ready. Review it, then tap Send to Pi.');
     } else if (!error) notice('No speech detected. Try again.', true);
   };
-  if ($('engine').value === 'browser') {
+  if (engine === 'browser') {
     if (!SpeechRecognition) {
       error = true;
       notice('Speech recognition is unavailable. Use the Termux:API engine in Settings or your keyboard’s microphone.', true);
@@ -845,7 +883,7 @@ $('image-input').addEventListener('change', () => {
   void addImages(files);
 });
 $('stop-host').addEventListener('click', async () => {
-  if (!confirm('Stop the Pi Voice service? Reconnect starts it again.')) return;
+  if (!await ask({ title: 'Stop the Pi Voice service?', message: 'No session is running. Reconnect starts the service again.', confirm: 'Stop service', danger: true })) return;
   try { await api('host/stop', { method: 'POST', body: {}, handle: null }); connected = false; offline = true; notice('Pi Voice service stopped.'); controls(); }
   catch (error) { notice(error.message, true); }
 });
@@ -861,7 +899,11 @@ $('draft').addEventListener('input', controls);
 $('clear').addEventListener('click', () => { $('draft').value = ''; setAttachments([]); controls(); });
 $('abort').addEventListener('click', async () => {
   const sessionId = state?.sessionId;
-  if (!connected || !sessionId || !confirm('Stop Pi’s current task? Already completed actions cannot be undone.')) return;
+  if (!connected || !sessionId) return;
+  const question = sessionOptions.compacting()
+    ? { title: 'Stop compacting?', message: 'The conversation stays as it was.', confirm: 'Stop', danger: true }
+    : { title: 'Stop Pi’s current task?', message: 'Already completed actions cannot be undone.', confirm: 'Stop task', danger: true };
+  if (!await ask(question) || !connected || state?.sessionId !== sessionId) return;
   try { await api('abort', { method: 'POST', body: { sessionId } }); optimisticQuestion = undefined; notice('Stop requested.'); haptic('tap'); await poll(); }
   catch (err) { notice(err.message, true); }
 });
@@ -882,22 +924,27 @@ window.__piVoiceOpenSession = (handle, sessionId = '') => {
   return true; // Accepted, not yet opened: Android waits for notificationHandled.
 };
 document.addEventListener('pointerdown', unlockAudio, { capture: true });
-for (const id of ['engine', 'language']) {
-  $(id).addEventListener('change', () => {
-    storage.set(id, $(id).value);
-    if (!listening) $('listening').textContent = speechHint();
+$('language').addEventListener('change', () => {
+  storage.set('language', $('language').value);
+  controls();
+});
+for (const value of ['browser', 'termux']) {
+  $(`engine-${value}`).addEventListener('click', () => {
+    if (listening) return;
+    setEngine(value);
+    storage.set('engine', value);
     controls();
   });
 }
 $('awake').addEventListener('change', () => { storage.set('awake', String($('awake').checked)); void syncWakeLock(); });
-for (const name of ['sessions', 'activity', 'history', 'settings']) {
+for (const name of ['sessions', 'activity', 'history', 'settings', 'model']) {
   const dialog = $(`${name}-dialog`);
   $(`open-${name}`).addEventListener('click', () => {
     if (name === 'history') renderMessages(state?.messages || []);
     if (name === 'sessions') { renderSessions(); void pollSessions(); }
     if (name === 'activity') { renderActivity(); void pollActivity(); }
     dialog.showModal();
-    if (name === 'settings') void modelPicker.open();
+    if (name === 'model') { controls(); void modelPicker.open(); }
   });
   $(`close-${name}`).addEventListener('click', () => dialog.close());
   dialog.addEventListener('click', (event) => { if (event.target === dialog) dialog.close(); });
@@ -915,7 +962,7 @@ window.addEventListener?.('pagehide', () => playback.stop());
 const pullThreshold = 64;
 const pull = { start: undefined, distance: 0, active: false };
 let refreshing = false;
-const sheetOpen = () => ['sessions', 'activity', 'history', 'settings'].some((name) => $(`${name}-dialog`).open);
+const sheetOpen = () => ['sessions', 'activity', 'history', 'settings', 'model', 'confirm'].some((name) => $(`${name}-dialog`).open);
 const atTop = () => !($('latest-answer').scrollTop > 0) && !($('latest-question').scrollTop > 0);
 function showPull(distance, settle = false) {
   const indicator = $('pull-indicator');
@@ -979,7 +1026,8 @@ $('exchange').addEventListener('touchcancel', () => { pull.active = false; endPu
 $('thinking').addEventListener('click', () => $('open-activity').click());
 $('reconnect').addEventListener('click', reconnect);
 $('restore-banner').addEventListener('click', () => $('open-sessions').click());
-$('open-terminal').addEventListener('click', openTerminal);
+$('open-terminal').addEventListener('click', () => { void openTerminal(); });
+$('settings-model').addEventListener('click', () => { $('settings-dialog').close(); $('open-model').click(); });
 $('sessions-new').addEventListener('click', () => { $('sessions-dialog').close(); void startNewSession(); });
 setInterval(() => {
   if (document.hidden) return;

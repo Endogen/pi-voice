@@ -13,7 +13,9 @@
       if (!sessionState.sessionsSupported) { notice('Restart Pi once to run sessions in parallel. Your conversation and draft are kept.', true); return; }
       // Always keep the current Pi: replacing an idle runtime made its conversation
       // disappear from Sessions, even though it was still saved on disk.
-      if (!confirm('Start a new session alongside this one? This one keeps running; switch back any time from Sessions. Your unsent draft and images stay in the composer.')) return;
+      const proceed = await confirm({ title: 'Start a new session?', message: 'It runs alongside this one, which keeps running; switch back any time from Sessions. Your unsent draft and images stay in the composer.', confirm: 'Start session' });
+      // The answer can take a while: check again that nothing else started.
+      if (!proceed || !app().connected || sessionStarting() || modelChanging() || sessionState.spawnRequest || sessionState.switchPending || app().sending || app().listening || app().preparingImages) return;
       const request = { id: crypto.randomUUID(), deadline: Date.now() + 45000 };
       sessionState.spawnRequest = request;
       notice('Starting a new session…');
@@ -70,7 +72,7 @@
       selectTarget(target.handle, true);
       // Never leave an unrelated reply visible while the notification is loading.
       clearState();
-      for (const name of ['sessions', 'activity', 'history', 'settings']) $(`${name}-dialog`).close();
+      for (const name of ['sessions', 'activity', 'history', 'settings', 'model', 'confirm']) $(`${name}-dialog`).close();
       notice('Opening the notified conversation…');
       void poll();
     }
@@ -170,7 +172,7 @@
     }
     async function closeSession(item) {
       const working = item.busy || item.pending ? 'Pi is still working there; its task will stop. ' : '';
-      if (!confirm(`Close “${item.title || 'this session'}”? ${working}The conversation stays saved in Pi.`)) return;
+      if (!await confirm({ title: `Close “${item.title || 'this session'}”?`, message: `${working}The conversation stays saved in Pi.`, confirm: 'Close session', danger: true })) return;
       try {
         await api('session/close', { method: 'POST', body: { sessionId: item.sessionId, instanceId: item.instanceId }, handle: item.handle });
         await pollSessions();

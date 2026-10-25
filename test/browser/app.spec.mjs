@@ -1,14 +1,18 @@
 import { test, expect, fail } from './fixture.mjs';
 import { fileURLToPath } from 'node:url';
 
+const localRow = (page) => page.locator('#model-list .option-row').filter({ hasText: 'Local text' });
 async function chooseLocal(page) {
-  await page.locator('#open-settings').click();
-  await expect(page.locator('#model-choice')).toBeEnabled();
-  await page.locator('#model-filter').fill('qwen/model');
-  await page.locator('#model-choice').selectOption(JSON.stringify(['local', 'qwen/model:Q5']));
+  await expect(page.locator('#open-model')).toHaveText('Cloud visionMed');
+  await page.locator('#open-model').click();
+  await expect(localRow(page)).toContainText('Text only');
+  await localRow(page).click();
+  await expect(page.locator('#confirm-dialog')).toBeVisible();
+  await expect(page.locator('#confirm-title')).toHaveText('Use Local text?');
+  await page.locator('#confirm-accept').click();
 }
 
-test('real dialogs, select filtering, image decoding and Enter preserve the draft across a model change', async ({ page, app }) => {
+test('page-drawn dialogs, image decoding and Enter preserve the draft across a model change', async ({ page, app }) => {
   await page.locator('#draft').fill('Keep this draft');
   await page.locator('#draft').press('Enter');
   await expect(page.locator('#draft')).toHaveValue('Keep this draft\n');
@@ -16,10 +20,12 @@ test('real dialogs, select filtering, image decoding and Enter preserve the draf
   await page.locator('#image-input').setInputFiles(fileURLToPath(new URL('../../public/icon-192.png', import.meta.url)));
   await expect(page.locator('#attachments img')).toBeVisible();
   await chooseLocal(page);
-  await expect(page.locator('#model-details')).toContainText('Text only');
-  await page.locator('#model-apply').click();
   await expect(page.locator('#model-status')).toContainText('Using local/');
-  await page.locator('#close-settings').click();
+  await expect(localRow(page)).toHaveAttribute('aria-checked', 'true');
+  await expect(page.locator('#thinking-status')).toContainText('no thinking levels');
+  await page.locator('#close-model').click();
+  await expect(page.locator('#model-chip-label')).toHaveText('Local text');
+  await expect(page.locator('#model-chip-level')).toBeHidden();
   await expect(page.locator('#draft')).toHaveValue('Keep this draft\n');
   await expect(page.locator('#attachments img')).toBeVisible();
   await expect(page.locator('#send')).toBeDisabled();
@@ -42,11 +48,10 @@ test('a delayed state response cannot undo a session switch or lose a draft', as
 
 test('a lost model acknowledgement waits for a fresh poll and never repeats the mutation', async ({ page, app }) => {
   await page.locator('#draft').fill('Wait for the model');
-  await chooseLocal(page);
   const held = app.holdNextState(app.state.handle);
   await held.started;
   app.onModel = async (_body, state) => { state.modelSwitching = true; throw fail(502, 'Acknowledgement lost'); };
-  await page.locator('#model-apply').click();
+  await chooseLocal(page);
   await expect.poll(() => app.requests.filter((r) => r.path === '/api/model').length).toBe(1);
   await expect(page.locator('#send')).toBeDisabled();
   held.release();
@@ -54,7 +59,7 @@ test('a lost model acknowledgement waits for a fresh poll and never repeats the 
   await expect(page.locator('#send')).toBeDisabled();
   app.choose(app.state, app.models[1]);
   await expect(page.locator('#model-status')).toContainText('Pi confirms');
-  await page.locator('#close-settings').click();
+  await page.locator('#close-model').click();
   await expect(page.locator('#send')).toBeEnabled();
   expect(app.requests.filter((r) => r.path === '/api/model')).toHaveLength(1);
 });
@@ -83,4 +88,23 @@ test('a notification switches to its exact conversation using the native callbac
   await expect(page.locator('#draft')).toHaveValue('Do not send while opening notification');
   await expect.poll(() => app.selected).toBe(target.handle);
   expect(app.requests.filter((r) => r.path === '/api/prompt')).toHaveLength(0);
+});
+
+test('thinking level and compaction use page-drawn controls, and declining a question changes nothing', async ({ page, app }) => {
+  await page.locator('#open-model').click();
+  await expect(page.locator('#context-usage')).toHaveText('8K of 128K tokens used · 6%');
+  await page.locator('#thinking-levels button', { hasText: /^High$/ }).click();
+  await expect(page.locator('#model-chip-level')).toHaveText('High');
+  await page.locator('#compact').click();
+  await page.locator('#confirm-cancel').click();
+  await expect(page.locator('#confirm-dialog')).toBeHidden();
+  expect(app.requests.filter((r) => r.path === '/api/compact')).toHaveLength(0);
+  await page.locator('#compact').click();
+  await page.locator('#confirm-accept').click();
+  await expect(page.locator('#compact')).toBeDisabled();
+  await expect(page.locator('#connection')).toContainText('Compacting');
+  app.state.compaction = { status: 'done', tokensBefore: 64000, ended: 1 };
+  await expect(page.locator('#notice')).toContainText('Conversation compacted from about 64K tokens');
+  await expect(page.locator('#compact')).toBeEnabled();
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
 });

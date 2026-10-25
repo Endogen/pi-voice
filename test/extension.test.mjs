@@ -16,7 +16,7 @@ process.env.PI_VOICE_RPC = '1';
 const { default: install, stateDir, createTerminal } = await import('../extension.mjs');
 after(() => rm(temp, { recursive: true, force: true }));
 
-function harness(mode = 'rpc', options = {}) {
+function harness(mode = 'rpc', options = {}, piExtras = {}) {
   const events = new Map();
   const commands = new Map();
   const sent = [];
@@ -37,6 +37,7 @@ function harness(mode = 'rpc', options = {}) {
     registerFlag() {}, getFlag: () => false,
     registerCommand: (name, command) => commands.set(name, command),
     sendUserMessage: (text, options) => { sent.push({ text, options }); },
+    ...piExtras,
   }, { wakeSettings: { load: async () => false, save: async () => {} }, ...options });
   return { events, commands, ctx, branch, sent, busy: (value) => { busy = value; }, aborts: () => aborts, shutdowns: () => shutdowns };
 }
@@ -459,4 +460,45 @@ test('empty failed and aborted replies remain visible with a bounded reason and 
     assert.ok((state.messages.at(-1).error || '').length <= 1000);
     assert.equal(alerts.length, 0);
   }
+});
+
+test('compaction runs once in the background, pauses prompts, reports its outcome, and Stop cancels it', async (t) => {
+  let level = 'medium';
+  const h = harness('rpc', {}, { getThinkingLevel: () => level, setThinkingLevel: (next) => { level = next; } });
+  const runs = [];
+  h.ctx.compact = (options) => runs.push(options);
+  h.ctx.model.reasoning = true;
+  await h.events.get('session_start')({ reason: 'startup' }, h.ctx);
+  t.after(() => h.events.get('session_shutdown')({ reason: 'quit' }, h.ctx));
+  const ep = await endpoint();
+  const request = (path, body) => fetch(`${ep.origin}/api/${path}`, {
+    method: body ? 'POST' : 'GET', headers: { Authorization: `Bearer ${ep.token}`, 'Content-Type': 'application/json' },
+    body: body ? JSON.stringify(body) : undefined,
+  });
+  const state = async () => (await request('state')).json();
+  const before = await state();
+  assert.deepEqual([before.thinkingSupported, before.thinkingLevel, before.thinkingLevels, before.compactSupported, before.compaction],
+    [true, 'medium', ['off', 'minimal', 'low', 'medium', 'high'], true, undefined]);
+  assert.deepEqual(await (await request('thinking', { sessionId: 'test-session', level: 'high' })).json(), { ok: true, thinkingLevel: 'high' });
+  h.busy(true);
+  assert.equal((await request('compact', { sessionId: 'test-session' })).status, 409, 'Compacting would abort the running task');
+  h.busy(false);
+  assert.equal((await request('compact', { sessionId: 'test-session' })).status, 202);
+  assert.equal((await request('compact', { sessionId: 'test-session' })).status, 409, 'One compaction at a time');
+  assert.equal(runs.length, 1);
+  assert.equal((await state()).compaction.status, 'running');
+  assert.equal((await request('prompt', { id: 'prompt-compact', text: 'wait', sessionId: 'test-session' })).status, 409);
+  assert.equal((await request('thinking', { sessionId: 'test-session', level: 'low' })).status, 409);
+  runs[0].onComplete({ tokensBefore: 90000 });
+  assert.deepEqual(Object.keys((await state()).compaction).sort(), ['ended', 'status', 'tokensBefore']);
+  assert.equal((await state()).compaction.status, 'done');
+  assert.equal((await request('compact', { sessionId: 'test-session' })).status, 202);
+  await request('abort', { sessionId: 'test-session' });
+  runs[1].onError(new Error('Compaction cancelled'));
+  assert.equal((await state()).compaction.status, 'cancelled');
+  assert.equal((await request('compact', { sessionId: 'test-session' })).status, 202);
+  runs[2].onError(new Error('Nothing to compact (session too small)'));
+  runs[2].onComplete({ tokensBefore: 1 });
+  assert.deepEqual([(await state()).compaction.status, (await state()).compaction.error], ['error', 'Nothing to compact (session too small)'], 'Only the first outcome counts');
+  assert.equal(h.sent.length, 0);
 });
