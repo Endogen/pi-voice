@@ -2,6 +2,8 @@
 
 An Android app for talking to the [Pi coding agent](https://github.com/earendil-works/pi) running in Termux on your phone: **tap the icon → speak → review the transcript → send to Pi**. Pi keeps running in Termux; Pi Voice gives it a focused, voice-first interface. There is no cloud service, public server or speech API key.
 
+**Website:** [endogen.github.io/pi-voice](https://endogen.github.io/pi-voice/) · **Download:** [latest APK](https://github.com/Endogen/pi-voice/releases/latest/download/pi-voice.apk)
+
 <table>
   <tr>
     <td align="center"><img src="docs/screenshots/chat.png" width="200" alt="A conversation: the question in a bubble and Pi's formatted reply"><br><sub>Latest question and reply</sub></td>
