@@ -1,6 +1,8 @@
 # Pi Voice
 
-An Android app for talking to the [Pi coding agent](https://github.com/earendil-works/pi) running in Termux on your phone: **tap the icon → speak → review the transcript → send to Pi**. Pi keeps running in Termux; Pi Voice gives it a focused, voice-first interface. There is no cloud service, public server or speech API key.
+**Your coding agent, running on your phone.** Pi Voice is the Android app for the [Pi coding agent](https://github.com/earendil-works/pi), which runs right on your device in Termux. It edits your files, runs commands, and uses git and GitHub on the phone itself, not on a remote server. Pair it with a local model, and nothing has to leave the device.
+
+Pi Voice gives that agent a real app: **tap the icon → speak → review the transcript → send**. There is no Pi Voice cloud service, account or public server.
 
 **Website:** [endogen.github.io/pi-voice](https://endogen.github.io/pi-voice/) · **Download:** [latest APK](https://github.com/Endogen/pi-voice/releases/latest/download/pi-voice.apk)
 
@@ -15,6 +17,9 @@ An Android app for talking to the [Pi coding agent](https://github.com/earendil-
 
 ## Features
 
+- **A whole agent on the device:** Pi works in Termux with a real shell. It edits files, runs tests, installs packages and uses git, the GitHub CLI and SSH on your phone.
+- **Your model, your choice:** use any provider Pi supports, or a local model served by llama.cpp or Ollama on the phone. With a local model and Android's offline speech, it can run completely offline.
+- **No server in between:** the app, its host and Pi talk only over `127.0.0.1`, behind a private token.
 - **Push-to-talk input** with Android speech recognition. Review and edit the transcript, then tap Send.
 - **Focused chat view:** your latest question and Pi's reply with safe Markdown (code, tables, lists). Older messages are in History.
 - **Live activity:** see the tool Pi is running, its output and the reply being written, and jump to Pi's terminal in Termux.
@@ -23,7 +28,6 @@ An Android app for talking to the [Pi coding agent](https://github.com/earendil-
 - **Images:** attach up to four screenshots or photos for vision-capable models.
 - **Read aloud:** listen to a finished reply on request.
 - **Know when Pi is done:** a chime and a light vibration when a reply arrives, and a notification when the app is in the background.
-- **Local and private:** the app talks to an authenticated bridge on `127.0.0.1` inside your own Pi.
 
 ## How it works
 
