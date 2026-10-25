@@ -124,7 +124,7 @@ test('host restart reattaches surviving processes; retries do not duplicate laun
 test('host owns assets and security boundary; workers expose no app or lifecycle manager', async (t) => {
   const h = await fixture(t);
   const first = await h.ready();
-  for (const path of ['/', '/app.js', '/style.css', '/icon.svg']) {
+  for (const path of ['/', '/app.js', '/style.css', '/icon-192.png']) {
     const response = await fetch(h.host.origin + path);
     assert.equal(response.status, 200);
     assert.match(response.headers.get('content-security-policy'), /frame-ancestors 'none'/);

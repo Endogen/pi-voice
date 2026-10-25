@@ -2,6 +2,7 @@
 
 ## 3.0.0
 
+- New app icon combines the mathematical π symbol with a microphone, with matching app and website favicons.
 - Independent Termux host owns the app connection, session registry, and lifecycle. Every managed session, including the first, can close without interrupting other workers.
 - Closing the last session leaves a connected empty screen; restarting the host reattaches surviving workers and preserves intentional closures.
 - Stable session handles, process-instance checks, atomic lifecycle records, serialized capacity reservations, and idempotent launch/restore requests.

@@ -57,7 +57,7 @@ async function shellSetup(t) {
 
 test('serves the app shell, scripts and icons with no external dependencies', async (t) => {
   const { bridge } = await shellSetup(t);
-  for (const path of ['/', '/app.js', '/style.css', '/icon.svg', '/icon-192.png']) {
+  for (const path of ['/', '/app.js', '/style.css', '/icon-192.png']) {
     const response = await fetch(bridge.origin + path);
     assert.equal(response.status, 200, path);
     assert.equal(response.headers.get('cache-control'), 'no-store');

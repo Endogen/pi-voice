@@ -39,7 +39,7 @@ async function files(directory, suffix) {
 await access(platform).catch(() => { throw new Error('Missing native/tools/android.jar. See native/README.md for the official SDK download.'); });
 for (const directory of ['out/gen', 'out/classes', 'out/dex']) await rm(join(root, directory), { recursive: true, force: true });
 for (const directory of ['out', 'out/gen', 'out/classes', 'out/dex', 'res/drawable']) await mkdir(join(root, directory), { recursive: true, mode: 0o700 });
-await copyFile(new URL('../public/icon-192.png', import.meta.url), join(root, 'res/drawable/icon.png'));
+await copyFile(new URL('../public/icon-512.png', import.meta.url), join(root, 'res/drawable/icon.png'));
 await chmod(join(root, 'host.sh'), 0o700);
 await run('aapt', ['package', '-f', '-m', '-M', join(root, 'AndroidManifest.xml'), '-S', join(root, 'res'), '-I', platform, '-J', join(out, 'gen'), '-F', join(out, 'resources.apk'), '-0', 'arsc']);
 await run('javac', ['--release', '8', '-classpath', platform, '-d', join(out, 'classes'), ...await files(join(root, 'java'), '.java'), ...await files(join(out, 'gen'), '.java')]);

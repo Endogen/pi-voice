@@ -1,0 +1,7 @@
+Pi Voice icon — approved concept B
+Generated using the built-in image_gen tool; icon.png is the original output.
+The 512px and 192px exports retain the approved design and colors.
+
+Prompt:
+Use case: logo-brand. Generate ONE polished square Android app icon concept for Pi Voice, a voice interface to the Pi coding agent. Combine the recognizable mathematical lowercase Greek pi symbol π with a recognizable microphone in a single coherent logo. Existing app palette is dark navy #141b2d and periwinkle blue #8eafff. A bold, distinctive silhouette that reads well at 48 pixels, precise edges, generous safe margins (all meaningful artwork within the central 65% of the canvas). Straight-on, full-bleed square artwork, no phone mockup, no surrounding presentation board, no labels, no words, no watermark, no additional symbols. The only typographic element is the pi symbol itself.
+Negative-space microphone: a single bold periwinkle microphone capsule contains a large dark navy π cutout. A simple blue U-shaped cradle and a short stem/base make the microphone instantly recognizable. The pi cutout is generous and clearly reads as π at small sizes. Solid navy full-bleed backdrop. Flat graphic precision, thick shapes, no tiny grille details, no gradients.

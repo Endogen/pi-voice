@@ -8,7 +8,6 @@ const assets = new Map([
   ['/', ['index.html', 'text/html; charset=utf-8']],
   ['/app.js', ['app.js', 'text/javascript; charset=utf-8']],
   ['/style.css', ['style.css', 'text/css; charset=utf-8']],
-  ['/icon.svg', ['icon.svg', 'image/svg+xml']],
   ['/icon-192.png', ['icon-192.png', 'image/png']],
 ]);
 
