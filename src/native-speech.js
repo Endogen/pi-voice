@@ -9,7 +9,11 @@
       if (active) throw new Error('Another recording is active.');
       this.id = crypto.randomUUID();
       active = this;
-      try { bridge.startSpeech(this.id, this.lang || 'en-US'); }
+      // Newer apps can use a speech service chosen in Settings.
+      try {
+        if (this.service && this.service !== 'default' && typeof bridge.startSpeechWith === 'function') bridge.startSpeechWith(this.id, this.lang || 'en-US', this.service);
+        else bridge.startSpeech(this.id, this.lang || 'en-US');
+      }
       catch (error) { active = undefined; throw error; }
     }
     stop() { if (active === this) bridge.stopSpeech(this.id); }

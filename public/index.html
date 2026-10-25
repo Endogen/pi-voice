@@ -127,15 +127,19 @@
         <h3>Voice input</h3>
         <label class="switch"><span>Send automatically after speech</span><input type="checkbox" id="auto-send" role="switch"></label>
         <p class="hint">Off by default, so you can review the transcript first. When on, the transcript is sent 2 seconds after you stop speaking unless you tap Edit or change it. Images always wait for Send, and nothing is sent to a different session.</p>
-        <span id="engine-label" class="field-label">Speech engine</span>
-        <div id="engine" class="segmented" role="radiogroup" aria-labelledby="engine-label"><button id="engine-browser" type="button" role="radio" aria-checked="true">Android speech</button><button id="engine-termux" type="button" role="radio" aria-checked="false">Termux:API</button></div>
+        <span id="engine-label" class="field-label">Speech recognition</span>
+        <div id="speech-engines" class="option-list" role="radiogroup" aria-labelledby="engine-label" aria-describedby="speech-engines-hint"></div>
+        <p id="speech-engines-hint" class="hint"></p>
         <label id="speech-language-label" for="language">Speech language</label>
         <input id="language" type="text" value="en-US" maxlength="35" placeholder="en-US, de-DE, …" autocapitalize="off" spellcheck="false">
-        <p class="hint">Android speech is recommended; use Termux:API if it does not work on your phone. The Termux:API fallback uses its own language setting. Allow microphone access when Android asks. Your speech provider may process audio online; this app stores no audio.</p>
+        <p class="hint">Use Termux:API only if the phone’s speech services do not work. Allow microphone access when Android asks. Your speech provider may process audio online; this app stores no audio.</p>
       </section>
       <section class="settings-section" aria-label="Read replies aloud">
         <h3>Voice output</h3>
         <p id="read-support" class="hint">Tap Read aloud beside Pi’s reply to listen. Replies never play automatically.</p>
+        <span id="read-engine-label" class="field-label">Read-aloud engine</span>
+        <div id="read-engines" class="option-list" role="radiogroup" aria-labelledby="read-engine-label" aria-describedby="read-engines-hint"></div>
+        <p id="read-engines-hint" class="hint"></p>
         <label for="read-language">Read-aloud language</label>
         <input id="read-language" type="text" value="en-US" maxlength="35" placeholder="en-US, de-DE, …" autocapitalize="off" spellcheck="false">
         <p class="hint">Uses Android text-to-speech. Install a voice in Android’s text-to-speech settings if needed. Your selected speech provider may process the reply online. Code blocks are skipped; the text remains visible. Playback stops when you leave the app, start speaking or switch replies.</p>
@@ -157,7 +161,6 @@
       </section>
       <section class="settings-section session" aria-label="Connected session">
         <h3>Connected Pi</h3><strong id="session">No session connected</strong><small id="directory"></small><small id="model"></small>
-        <button id="settings-model" class="wide-button outline" aria-haspopup="dialog" aria-controls="model-dialog" disabled><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3v3M12 18v3M3 12h3M18 12h3"/><circle cx="12" cy="12" r="5"/></svg>Model, thinking &amp; context</button>
       </section>
       <section class="settings-section" aria-label="Versions"><h3>About</h3><dl class="about"><div><dt>Pi Voice</dt><dd id="voice-version">—</dd></div><div><dt>Pi</dt><dd id="pi-version">—</dd></div></dl><p id="version-hint" class="hint" hidden></p></section>
       <section class="settings-section"><h3>Termux</h3><p class="hint">Pi runs in Termux in the background; this app starts it and resumes your conversation if it stopped. To see Pi’s terminal, open Activity and tap Open in Termux. In Pi, <code>/voice stop</code> disconnects the app and <code>/voice</code> reconnects it. Phone-only connection; no public server.</p></section>

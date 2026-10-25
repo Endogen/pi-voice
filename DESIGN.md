@@ -30,7 +30,7 @@ Critique of 1.7: double top inset in the native WebView (the shell already pads 
 
 ## Model, thinking level and context
 
-These belong to the connected Pi session, not the global app configuration. A chip in the composer toolbar shows the session's model and thinking level and opens the **Model** sheet (also reachable from Settings → Connected Pi): thinking level, context use with **Compact conversation**, and the model list. They are runtime controls you need mid-conversation; providers, keys, defaults and other Pi configuration stay in Pi.
+These belong to the connected Pi session, not the global app configuration. A chip in the composer toolbar shows the session's model and thinking level and opens the **Model** sheet: thinking level, context use with **Compact conversation**, and the model list. They are runtime controls you need mid-conversation; providers, keys, defaults and other Pi configuration stay in Pi.
 
 The model list is page-drawn: provider groups (Pi's scoped models first), capability summaries, a filter for longer lists, and a check on the active model. Tapping a model switches immediately when it is free to do so; a provider change, a smaller context window or unsent images that the model cannot receive ask first. Thinking levels come from Pi's model capabilities and may change while Pi works (they apply to its next request). Compaction asks first, pauses sending (not typing) while Pi summarizes, can be stopped with Stop, and reports its outcome.
 
@@ -50,6 +50,7 @@ Failed assistant attempts are retained, including empty replies and partial text
 - Clear working, waiting, disconnected and listening states. Do not reveal private model reasoning.
 - Reduced-motion preference gets a static visible indicator rather than no indicator.
 - Sheets and confirmations are HTML `<dialog>` elements in the app's own style: Escape/back and tapping outside decline, content scrolls internally, and Close/Cancel are explicit. Never use `window.confirm` or `<select>`: the WebView renders them as dated native Android widgets. Destructive confirmations use a red primary button.
+- Speech recognition and read-aloud use what is installed on the phone: Android speech services (including Whisper-based ones), its on-device recognizer and text-to-speech engines (including Piper-based ones), plus Termux:API. The app lists and routes to them; it never downloads or runs speech models. Page-supplied engine IDs are validated (`EngineChoice`) and must match an installed service before Android sees them.
 - The few dialogs Android must show itself (leaving the app for an external link, a deferred update) use the `PiDialog` theme with the same colours. Leaving the app stays a native confirmation so page content cannot fake it.
 - Do not reset answer scroll on unchanged polling. History remains newest-first, including Markdown.
 - Wake lock protects CPU wakefulness, not against force stop, low memory or Android vendor battery policies. No browser screen wake lock: the display is allowed to sleep.

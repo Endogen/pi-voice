@@ -109,7 +109,7 @@ Closing one session leaves the host and other sessions running. Closing the last
 
 ### Model, thinking level and context
 
-The chip next to the microphone shows the session's model and thinking level. Tap it (or **Settings → Model, thinking & context**) to open the **Model** sheet. Everything there applies to **this Pi session only**; set up providers, keys and defaults in Pi itself.
+The chip next to the microphone shows the session's model and thinking level. Tap it to open the **Model** sheet. Everything there applies to **this Pi session only**; set up providers, keys and defaults in Pi itself.
 
 - **Thinking level:** Pi's levels for the current model, from Off to the highest it supports. A change applies to Pi's next request, so you can raise it while Pi works on something. Models without thinking show none.
 - **Context:** how much of the model's context window the conversation uses. **Compact conversation** asks Pi to summarize earlier messages, the same as `/compact` in Pi. It runs only while Pi is idle, sending waits until it finishes (you can keep typing), and **Stop** cancels it. Pi also compacts by itself when the context is nearly full.
@@ -170,12 +170,13 @@ Notifications come from the Pi extension in Termux, which tells the app when a r
 
 ### Settings
 
-- **Voice input:** auto-send, the speech engine (Android speech, or Termux:API as a fallback) and the speech language.
+- **Voice input:** auto-send, speech recognition and the speech language.
+  - **Speech recognition** lists the phone's default, every speech service installed on the phone, Android's on-device recognizer (Android 12+, where available) and Termux:API as a fallback. For **Whisper**, install a Whisper-based speech service app such as [Whisper+](https://github.com/woheller69/whisperIMEplus) or [Transcribro](https://github.com/soupslurpr/Transcribro) (English only), then choose it here. Some services ignore the speech language.
   - **Send automatically after speech** is off by default. When on, the transcript is sent 2 seconds after you stop speaking, with a countdown above the composer. Tap **Edit**, type, tap into the draft, attach an image or leave the app to cancel; the transcript stays in the draft. Messages with images always wait for Send, nothing is sent to a session other than the one you spoke to, and during a model change or compaction it waits until Pi is ready.
-- **Voice output:** the read-aloud language, for example `en-US` or `de-DE`. Install matching voices in Android's text-to-speech settings.
+- **Voice output:** the read-aloud engine and language, for example `en-US` or `de-DE`. Every text-to-speech engine installed on the phone is listed; for natural offline [Piper](https://github.com/rhasspy/piper) voices install an engine such as [SherpaTTS](https://f-droid.org/packages/org.woheller69.ttsengine/). Install matching voices in the engine or in Android's text-to-speech settings.
 - **Replies & feedback:** reply notifications, the reply chime and haptic feedback.
 - **Keep Pi available:** the Termux wake lock (see below).
-- **Connected Pi:** the session, folder and active model, with a shortcut to the Model sheet.
+- **Connected Pi:** the session, folder and active model. Change the model and thinking level with the chip next to the microphone.
 - **About:** the Pi Voice and Pi versions of the connected session, with a note if it still runs an older Pi Voice backend.
 
 ## Keeping Pi running
@@ -257,6 +258,7 @@ To rotate the token, quit all Pi instances and stop the Pi Voice service, then d
 | `src/model-picker.js` | Provider-independent model-picker UI; no provider requests or runtime management. |
 | `src/session-options.js` | Thinking-level and compaction controls of the Model sheet. |
 | `src/dialogs.js` | The app's own confirmation dialog, used instead of Android's native one. |
+| `src/speech-engines.js` | Settings lists of the phone's installed speech-recognition services and text-to-speech engines. |
 | `transport.mjs`, `config.mjs`, `storage.mjs` | Shared HTTP boundary, authentication/configuration, and atomic persistence. |
 | `discovery.mjs` | Finds running bridges from private endpoint records. |
 | `running.mjs` | Records which conversations are open, for restoring them after Pi stops. |

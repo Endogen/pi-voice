@@ -7,6 +7,7 @@ import android.app.NotificationManager;
 import android.app.PendingIntent;
 import android.content.ClipData;
 import android.content.ComponentName;
+import android.content.ComponentName;
 import android.content.Intent;
 import android.content.pm.PackageManager;
 import android.content.res.ColorStateList;
@@ -75,7 +76,7 @@ public final class MainActivity extends Activity {
     private boolean pageReady, loadFailed, destroyed, resumed;
     private ValueCallback<Uri[]> fileCallback;
     private SpeechRecognizer recognizer;
-    private String speechId, speechLanguage;
+    private String speechId, speechLanguage, speechService = SpeechEngines.DEFAULT;
     private ReplySpeaker replySpeaker;
     private final SessionOpenRequest openRequest = new SessionOpenRequest();
     private int openDeliveryAttempts;
@@ -328,7 +329,7 @@ public final class MainActivity extends Activity {
                     for (String key : Prefs.UI_KEYS) {
                         if (!values.isNull(key)) {
                             String value = values.getString(key);
-                            if (value.length() <= 128) editor.putString("ui." + key, value);
+                            if (value.length() <= 400) editor.putString("ui." + key, value);
                         }
                     }
                     editor.apply();
@@ -452,28 +453,35 @@ public final class MainActivity extends Activity {
     // Pi's terminal.
     public final class SpeechBridge {
         @JavascriptInterface public void setUiPreference(String key, String value) {
-            if (!Prefs.uiKey(key) || value == null || value.length() > 128) return;
+            if (!Prefs.uiKey(key) || value == null || value.length() > 400) return;
             handler.post(() -> { if (trustedPage()) Prefs.get(MainActivity.this).edit().putString("ui." + key, value).apply(); });
         }
-        @JavascriptInterface public void speakText(String id, String text, String language) {
+        // Installed choices for Settings, as JSON: [{id, label, default}].
+        @JavascriptInterface public String speechServices() { return SpeechEngines.recognizers(MainActivity.this); }
+        @JavascriptInterface public String readAloudEngines() { return SpeechEngines.synthesizers(MainActivity.this); }
+        @JavascriptInterface public void speakText(String id, String text, String language) { speakTextWith(id, text, language, SpeechEngines.DEFAULT); }
+        @JavascriptInterface public void speakTextWith(String id, String text, String language, String engine) {
             if (id == null || !id.matches("[a-fA-F0-9-]{36}")) return;
+            final String choice = EngineChoice.validPackage(engine) ? engine : null;
             handler.post(() -> {
                 if (!trustedPage()) return;
                 if (!resumed || !web.hasWindowFocus()) { emitPlayback(id, "error", "interrupted"); return; }
                 cancelSpeech("aborted");
-                replySpeaker.speak(id, text, language);
+                replySpeaker.speak(id, text, language, choice);
             });
         }
         @JavascriptInterface public void stopReading(String id) {
             handler.post(() -> { if (trustedPage()) replySpeaker.stop(id); });
         }
-        @JavascriptInterface public void startSpeech(String id, String language) {
+        @JavascriptInterface public void startSpeech(String id, String language) { startSpeechWith(id, language, SpeechEngines.DEFAULT); }
+        @JavascriptInterface public void startSpeechWith(String id, String language, String service) {
             if (id == null || !id.matches("[a-fA-F0-9-]{36}")) return;
+            final String choice = EngineChoice.recognizer(service);
             handler.post(() -> {
                 if (!trustedPage()) return;
                 if (!resumed || !web.hasWindowFocus()) { emitSpeech(id, "error", "aborted"); emitSpeech(id, "end", ""); return; }
                 replySpeaker.stop();
-                cancelSpeech("aborted"); speechId = id;
+                cancelSpeech("aborted"); speechId = id; speechService = choice;
                 speechLanguage = language != null && language.matches("[a-zA-Z0-9-]{2,35}") ? language : "en-US";
                 if (checkSelfPermission(Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED) requestPermissions(new String[]{Manifest.permission.RECORD_AUDIO}, MICROPHONE_PERMISSION);
                 else beginSpeech();
@@ -578,10 +586,11 @@ public final class MainActivity extends Activity {
 
     private void beginSpeech() {
         if (speechId == null || recognizer != null || !resumed) return;
-        if (!trustedPage() || !SpeechRecognizer.isRecognitionAvailable(this)) { cancelSpeech("service-not-allowed"); return; }
+        if (!trustedPage()) { cancelSpeech("service-not-allowed"); return; }
         final String id = speechId;
         try {
-            recognizer = SpeechRecognizer.createSpeechRecognizer(this);
+            recognizer = createRecognizer(speechService);
+            if (recognizer == null) { cancelSpeech("service-unavailable"); return; }
             recognizer.setRecognitionListener(new RecognitionListener() {
                 @Override public void onReadyForSpeech(Bundle params) {}
                 @Override public void onBeginningOfSpeech() {}
@@ -591,7 +600,7 @@ public final class MainActivity extends Activity {
                 @Override public void onEvent(int type, Bundle params) {}
                 @Override public void onError(int error) {
                     if (!id.equals(speechId)) return;
-                    String code = error == SpeechRecognizer.ERROR_INSUFFICIENT_PERMISSIONS ? "not-allowed" : error == SpeechRecognizer.ERROR_NO_MATCH || error == SpeechRecognizer.ERROR_SPEECH_TIMEOUT ? "no-speech" : error == SpeechRecognizer.ERROR_NETWORK || error == SpeechRecognizer.ERROR_NETWORK_TIMEOUT ? "network" : error == SpeechRecognizer.ERROR_AUDIO ? "audio-capture" : "service-not-allowed";
+                    String code = error == SpeechRecognizer.ERROR_LANGUAGE_NOT_SUPPORTED || error == SpeechRecognizer.ERROR_LANGUAGE_UNAVAILABLE ? "language-not-supported" : error == SpeechRecognizer.ERROR_INSUFFICIENT_PERMISSIONS ? "not-allowed" : error == SpeechRecognizer.ERROR_NO_MATCH || error == SpeechRecognizer.ERROR_SPEECH_TIMEOUT ? "no-speech" : error == SpeechRecognizer.ERROR_NETWORK || error == SpeechRecognizer.ERROR_NETWORK_TIMEOUT ? "network" : error == SpeechRecognizer.ERROR_AUDIO ? "audio-capture" : "service-not-allowed";
                     cancelSpeech(code);
                 }
                 @Override public void onResults(Bundle results) {
@@ -610,6 +619,18 @@ public final class MainActivity extends Activity {
             recognizer.startListening(request);
             handler.postDelayed(() -> { if (id.equals(speechId)) cancelSpeech("no-speech"); }, 60000);
         } catch (RuntimeException error) { cancelSpeech("service-not-allowed"); }
+    }
+
+    // The phone's default service, Android's on-device recognizer, or an installed
+    // service the user picked (for example a Whisper-based one). Never a guess.
+    private SpeechRecognizer createRecognizer(String service) {
+        if (SpeechEngines.ON_DEVICE.equals(service)) {
+            return Build.VERSION.SDK_INT >= 31 && SpeechRecognizer.isOnDeviceRecognitionAvailable(this) ? SpeechRecognizer.createOnDeviceSpeechRecognizer(this) : null;
+        }
+        if (EngineChoice.validComponent(service)) {
+            return SpeechEngines.installedRecognizer(this, service) ? SpeechRecognizer.createSpeechRecognizer(this, ComponentName.unflattenFromString(service)) : null;
+        }
+        return SpeechRecognizer.isRecognitionAvailable(this) ? SpeechRecognizer.createSpeechRecognizer(this) : null;
     }
 
     private String firstResult(Bundle results) {

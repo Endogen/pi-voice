@@ -137,7 +137,11 @@ test('native Android contract has fixed commands, non-exported result receiver a
   const manifest = await readFile(new URL('../native/AndroidManifest.xml', import.meta.url), 'utf8');
   const script = await readFile(new URL('../native/host.sh', import.meta.url), 'utf8');
   const methods = [...source.matchAll(/@JavascriptInterface public \w+ (\w+)/g)].map((match) => match[1]);
-  assert.deepEqual(methods, ['setUiPreference', 'speakText', 'stopReading', 'startSpeech', 'stopSpeech', 'abortSpeech', 'haptic', 'setReplyAlerts', 'replyAlertStatus', 'notificationHandled', 'reconnect', 'openTerminal']);
+  assert.deepEqual(methods, ['setUiPreference', 'speechServices', 'readAloudEngines', 'speakText', 'speakTextWith', 'stopReading', 'startSpeech', 'startSpeechWith', 'stopSpeech', 'abortSpeech', 'haptic', 'setReplyAlerts', 'replyAlertStatus', 'notificationHandled', 'reconnect', 'openTerminal']);
+  // Engine IDs from the page are validated and must match an installed service.
+  assert.match(source, /EngineChoice\.recognizer\(service\)/);
+  assert.match(source, /SpeechEngines\.installedRecognizer\(this, service\) \? SpeechRecognizer\.createSpeechRecognizer\(this, ComponentName\.unflattenFromString\(service\)\)/);
+  assert.match(source, /EngineChoice\.validPackage\(engine\) \? engine : null/);
   const receiver = await readFile(new URL('../native/java/com/pivoice/app/ReplyReceiver.java', import.meta.url), 'utf8');
   // Reply alerts: HMAC-verified before anything else, then only in the background.
   assert.match(receiver, /if \(!ReplyAlerts\.verify\(prefs\.getString\(Prefs\.TOKEN, null\)[^\n]+\) return;\s+\/\/[^\n]+\s+if \(MainActivity\.inForeground\(\)/);

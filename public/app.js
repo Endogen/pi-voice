@@ -130,7 +130,11 @@ globalThis.PiVoiceVersion = "3.0.0";
       if (active) throw new Error('Another recording is active.');
       this.id = crypto.randomUUID();
       active = this;
-      try { bridge.startSpeech(this.id, this.lang || 'en-US'); }
+      // Newer apps can use a speech service chosen in Settings.
+      try {
+        if (this.service && this.service !== 'default' && typeof bridge.startSpeechWith === 'function') bridge.startSpeechWith(this.id, this.lang || 'en-US', this.service);
+        else bridge.startSpeech(this.id, this.lang || 'en-US');
+      }
       catch (error) { active = undefined; throw error; }
     }
     stop() { if (active === this) bridge.stopSpeech(this.id); }
@@ -203,7 +207,7 @@ globalThis.PiVoicePlayback = (() => {
       else if (kind === 'end') finish(run);
       else if (kind === 'error') fail(detail);
     };
-    function speak(text, language) {
+    function speak(text, language, engine = 'default') {
       stop();
       if (!supported) { onError(bridge ? 'upgrade' : 'unsupported'); return; }
       text = String(text).trim();
@@ -216,7 +220,9 @@ globalThis.PiVoicePlayback = (() => {
       try {
         if (native) {
           arm(run, 20000);
-          bridge.speakText(run.id, text, language);
+          // Newer apps can use a text-to-speech engine chosen in Settings.
+          if (engine !== 'default' && typeof bridge.speakTextWith === 'function') bridge.speakTextWith(run.id, text, language, engine);
+          else bridge.speakText(run.id, text, language);
         } else {
           const parts = chunks(text);
           let index = 0;
@@ -246,6 +252,122 @@ globalThis.PiVoicePlayback = (() => {
     return Object.freeze({ supported, needsUpgrade: Boolean(bridge && !native), get active() { return Boolean(active); }, speak, stop });
   }
   return Object.freeze({ create, chunks, maxText });
+})();
+
+;
+/* Speech recognition and read-aloud engines for Settings. The choices are the
+ * services installed on the phone (for example a Whisper-based recognizer or a
+ * Piper voice engine), listed by the native app; nothing is downloaded here. */
+(() => {
+  'use strict';
+  const check = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="m5 12.5 4.5 4.5L19 7.5"/></svg>';
+  const valid = (item) => item && typeof item.id === 'string' && item.id.length > 0 && item.id.length <= 400 && typeof item.label === 'string';
+  function installed(call) {
+    try {
+      const list = JSON.parse(call());
+      return Array.isArray(list) ? list.filter(valid).map((item) => ({ id: item.id, label: item.label.slice(0, 80), preferred: item.default === true })) : [];
+    } catch { return []; }
+  }
+  function create({ element: $, createElement, bridge, storage, webSpeech, changed }) {
+    const canChooseService = typeof bridge?.speechServices === 'function' && typeof bridge?.startSpeechWith === 'function';
+    const canChooseVoice = typeof bridge?.readAloudEngines === 'function' && typeof bridge?.speakTextWith === 'function';
+    let recognizers = [];
+    let voices = [];
+    // Older pages stored only "engine": browser (the phone's speech) or termux.
+    let recognizer = storage.get('speech-service') || (storage.get('engine') === 'termux' || (!bridge && !webSpeech) ? 'termux' : 'default');
+    let voice = storage.get('read-engine') || 'default';
+    let locked = false;
+    function recognizerOptions() {
+      const preferred = recognizers.find((item) => item.preferred);
+      const options = [{ id: 'default', label: bridge ? 'Phone default' : 'Browser speech', sub: bridge ? preferred ? `Android’s selected service: ${preferred.label}` : 'Android’s selected speech service' : 'The browser’s built-in recognition' }];
+      for (const item of recognizers) {
+        options.push({ id: item.id, label: item.label, sub: item.id === 'on-device' ? 'Built into Android; may need a downloaded language' : `Installed speech service${item.preferred ? ' · phone default' : ''}` });
+      }
+      options.push({ id: 'termux', label: 'Termux:API', sub: 'Fallback through Termux; uses its own language setting' });
+      return options;
+    }
+    function voiceOptions() {
+      const preferred = voices.find((item) => item.preferred);
+      return [{ id: 'default', label: 'Phone default', sub: preferred ? `Android’s selected engine: ${preferred.label}` : 'Android’s selected text-to-speech engine' },
+        ...voices.map((item) => ({ id: item.id, label: item.label, sub: `Installed text-to-speech engine${item.preferred ? ' · phone default' : ''}` }))];
+    }
+    function rows(options, selected, choose) {
+      return options.map((option) => {
+        const button = createElement('button');
+        button.className = `option-row${option.id === selected ? ' current' : ''}`;
+        button.dataset.id = option.id;
+        button.setAttribute('role', 'radio');
+        button.setAttribute('aria-checked', String(option.id === selected));
+        const text = createElement('span');
+        text.className = 'option-text';
+        const title = createElement('span');
+        title.className = 'option-title';
+        title.textContent = option.label;
+        const sub = createElement('span');
+        sub.className = 'option-sub';
+        sub.textContent = option.sub;
+        text.append(title, sub);
+        const mark = createElement('span');
+        mark.className = 'option-mark';
+        if (option.id === selected) mark.innerHTML = check;
+        button.append(text, mark);
+        button.disabled = locked;
+        button.addEventListener('click', () => choose(option.id));
+        return button;
+      });
+    }
+    function render() {
+      const speech = recognizerOptions();
+      // A service that was uninstalled falls back to the phone's default.
+      const missing = !speech.some((option) => option.id === recognizer);
+      $('speech-engines').replaceChildren(...rows(speech, missing ? 'default' : recognizer, (id) => {
+        if (locked) return;
+        recognizer = id;
+        storage.set('speech-service', id);
+        storage.set('engine', id === 'termux' ? 'termux' : 'browser');
+        render(); changed();
+      }));
+      $('speech-engines-hint').textContent = missing ? 'Your previous speech service is no longer installed, so the phone default is used.'
+        : bridge && !canChooseService ? 'Update the Pi Voice app to choose other speech services, such as a Whisper-based one.'
+          : bridge ? 'Speech services installed on your phone appear here. For Whisper, install a Whisper-based speech service app (for example Whisper+ or Transcribro), then choose it. Some services ignore the speech language.'
+            : 'Open Pi Voice in its Android app to choose installed speech services.';
+      const reading = voiceOptions();
+      const absent = !reading.some((option) => option.id === voice);
+      $('read-engines').hidden = !canChooseVoice;
+      $('read-engines').replaceChildren(...(canChooseVoice ? rows(reading, absent ? 'default' : voice, (id) => {
+        voice = id;
+        storage.set('read-engine', id);
+        render(); changed();
+      }) : []));
+      $('read-engines-hint').textContent = !bridge ? 'Read aloud needs the Pi Voice app.'
+        : !canChooseVoice ? 'Update the Pi Voice app to choose another text-to-speech engine, such as Piper voices.'
+          : absent ? 'Your previous text-to-speech engine is no longer installed, so the phone default is used.'
+            : 'Text-to-speech engines installed on your phone appear here. For natural offline Piper voices, install an engine such as SherpaTTS, then choose it.';
+    }
+    // Apps can be installed while Pi Voice runs: read the lists again on demand.
+    function refresh() {
+      recognizers = canChooseService ? installed(() => bridge.speechServices()) : [];
+      voices = canChooseVoice ? installed(() => bridge.readAloudEngines()) : [];
+      render();
+    }
+    function current(list, id) { return id === 'default' || list.some((item) => item.id === id) ? id : 'default'; }
+    refresh();
+    return {
+      refresh,
+      // 'browser' covers both Android's recognizers and the browser's own.
+      get mode() { return recognizer === 'termux' ? 'termux' : 'browser'; },
+      get service() { return current(recognizers, recognizer); },
+      get voice() { return canChooseVoice ? current(voices, voice) : 'default'; },
+      lock(value) { if (locked !== value) { locked = value; render(); } },
+      restore(values) {
+        if (typeof values['speech-service'] === 'string') recognizer = values['speech-service'];
+        else if (values.engine === 'termux' || values.engine === 'browser') recognizer = values.engine === 'termux' ? 'termux' : 'default';
+        if (typeof values['read-engine'] === 'string') voice = values['read-engine'];
+        render();
+      },
+    };
+  }
+  globalThis.PiVoiceSpeechEngines = Object.freeze({ create });
 })();
 
 ;
@@ -1012,6 +1134,7 @@ const playback = globalThis.PiVoicePlayback.create({
       language: 'No voice for this language. Check Read-aloud language in Settings and install a matching Android voice.',
       'text-limit': 'This reply is too long to read aloud (maximum 32000 characters).',
       'audio-busy': 'Audio is busy. Stop other playback and try Read aloud again.',
+      engine: 'The read-aloud engine chosen in Settings is not installed anymore. Choose another one.',
       interrupted: 'Read aloud stopped.',
     };
     notice(hints[code] || 'Could not read the reply. Check your text-to-speech engine/installed voices and try again.', true);
@@ -1021,13 +1144,10 @@ const imageLimits = globalThis.PiVoiceImageLimits;
 const sessionStarting = () => state?.newSessionAction?.status === 'starting';
 const SpeechRecognition = globalThis.PiVoiceNativeRecognition || window.SpeechRecognition || window.webkitSpeechRecognition;
 $('language').value = storage.get('language') || navigator.language || 'en-US';
-let engine;
-function setEngine(value) {
-  engine = value === 'termux' ? 'termux' : 'browser';
-  $('engine-browser').setAttribute('aria-checked', String(engine === 'browser'));
-  $('engine-termux').setAttribute('aria-checked', String(engine === 'termux'));
-}
-setEngine(storage.get('engine') || (SpeechRecognition ? 'browser' : 'termux'));
+const speechEngines = globalThis.PiVoiceSpeechEngines.create({
+  element: $, createElement: (tag) => document.createElement(tag), bridge: window.PiVoiceAndroid, storage, webSpeech: Boolean(SpeechRecognition),
+  changed: () => { if (!listening) $('listening').textContent = speechHint(); controls(); },
+});
 $('awake').checked = storage.get('awake') !== 'false';
 // A new key: the pre-3.0 "autosend" preference stays ignored rather than
 // silently switching sending without review back on.
@@ -1098,15 +1218,15 @@ window.__piVoiceAlerts = alertHint;
 // independent host. The allowlist excludes tokens and session selection.
 window.__piVoiceRestorePreferences = (values) => {
   const booleans = ['awake', 'notify', 'sound', 'haptics', 'auto-send'];
-  const strings = ['language', 'engine', 'read-language'];
+  const strings = ['language', 'engine', 'read-language', 'speech-service', 'read-engine'];
   for (const key of [...booleans, ...strings, 'notify-asked', 'terminal-warned']) {
     const value = values?.[key];
-    if (typeof value !== 'string' || value.length > 128) continue;
+    if (typeof value !== 'string' || value.length > 400) continue;
     try { localStorage.setItem(`pi-voice-${key}`, value); } catch {}
     if (booleans.includes(key)) $(key).checked = value === 'true';
-    if (key === 'engine') setEngine(value);
-    else if (strings.includes(key)) $(key).value = value;
+    if (['language', 'read-language'].includes(key)) $(key).value = value;
   }
+  speechEngines.restore(values || {});
   syncAlerts(); controls();
 };
 
@@ -1247,7 +1367,6 @@ function controls() {
   setText('model-chip-level', chip.level);
   $('model-chip-level').hidden = !chip.level;
   $('open-model').setAttribute('aria-label', `Model: ${chip.name}${chip.levelName ? `, thinking level ${chip.levelName}` : ''}`);
-  $('settings-model').disabled = !sessionReady();
   $('listening').classList.toggle('live', listening);
   header();
   versions();
@@ -1260,8 +1379,7 @@ function controls() {
   for (const button of attachmentButtons) button.disabled = switching || sending || listening || preparingImages;
   $('microphone').disabled = switching || sending || preparingImages || (!sessionReady() && !listening);
   $('clear').disabled = switching || sending || listening || preparingImages;
-  $('engine-browser').disabled = listening;
-  $('engine-termux').disabled = listening;
+  speechEngines.lock(listening);
   $('language').disabled = listening;
   $('draft').readOnly = switching || listening || sending || preparingImages;
   $('microphone').setAttribute('aria-pressed', String(listening));
@@ -1439,7 +1557,7 @@ function readReply() {
   const target = readingTarget();
   if (!target || listening || document.hidden) return;
   readingSourceKey = target.key;
-  playback.speak(globalThis.PiVoiceMarkdown.speechText(target.text), $('read-language').value.trim());
+  playback.speak(globalThis.PiVoiceMarkdown.speechText(target.text), $('read-language').value.trim(), speechEngines.voice);
 }
 function imageSupportError() {
   if (!state?.imageAttachments) return 'Restart Pi once to enable image attachments, then refresh this page.';
@@ -1808,7 +1926,7 @@ async function startSpeech() {
       else notice(attachments.length ? 'Transcript and images ready. Review them, then tap Send.' : 'Transcript ready. Review it, then tap Send to Pi.');
     } else if (!error) notice('No speech detected. Try again.', true);
   };
-  if (engine === 'browser') {
+  if (speechEngines.mode === 'browser') {
     if (!SpeechRecognition) {
       error = true;
       notice('Speech recognition is unavailable. Use the Termux:API engine in Settings or your keyboard’s microphone.', true);
@@ -1816,6 +1934,7 @@ async function startSpeech() {
       return;
     }
     const engine = new SpeechRecognition();
+    engine.service = speechEngines.service;
     recognition = engine;
     engine.lang = $('language').value.trim() || 'en-US';
     engine.continuous = false;
@@ -1839,6 +1958,7 @@ async function startSpeech() {
         'no-speech': 'No speech detected. Try again.',
         'language-not-supported': 'Try another speech language in settings.',
         'service-not-allowed': 'Speech service is unavailable. Try the Termux:API engine.',
+        'service-unavailable': 'The speech service chosen in Settings is not available. Choose another one in Settings.',
         'aborted': 'Listening cancelled.',
       };
       notice(hints[event.error] || `Speech error: ${event.error}. Try the Termux:API engine.`, true);
@@ -1921,14 +2041,6 @@ $('language').addEventListener('change', () => {
   storage.set('language', $('language').value);
   controls();
 });
-for (const value of ['browser', 'termux']) {
-  $(`engine-${value}`).addEventListener('click', () => {
-    if (listening) return;
-    setEngine(value);
-    storage.set('engine', value);
-    controls();
-  });
-}
 $('auto-send').addEventListener('change', () => {
   storage.set('auto-send', String($('auto-send').checked));
   if (!$('auto-send').checked) cancelAutoSend('Auto-send cancelled. Tap Send when ready.');
@@ -1940,6 +2052,7 @@ for (const name of ['sessions', 'activity', 'history', 'settings', 'model']) {
     if (name === 'history') renderMessages(state?.messages || []);
     if (name === 'sessions') { renderSessions(); void pollSessions(); }
     if (name === 'activity') { renderActivity(); void pollActivity(); }
+    if (name === 'settings') speechEngines.refresh();
     dialog.showModal();
     if (name === 'model') { controls(); void modelPicker.open(); }
   });
@@ -2024,7 +2137,6 @@ $('thinking').addEventListener('click', () => $('open-activity').click());
 $('reconnect').addEventListener('click', reconnect);
 $('restore-banner').addEventListener('click', () => $('open-sessions').click());
 $('open-terminal').addEventListener('click', () => { void openTerminal(); });
-$('settings-model').addEventListener('click', () => { $('settings-dialog').close(); $('open-model').click(); });
 $('sessions-new').addEventListener('click', () => { $('sessions-dialog').close(); void startNewSession(); });
 setInterval(() => {
   if (document.hidden) return;

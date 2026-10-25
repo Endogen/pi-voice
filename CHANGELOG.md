@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- **Choose any installed speech engine.** Settings lists every speech-recognition service and text-to-speech engine installed on the phone, plus Android's on-device recognizer and the Termux:API fallback. Whisper works through a Whisper-based speech service app (for example Whisper+ or Transcribro), and Piper voices through an engine such as SherpaTTS. Pi Voice downloads and runs no models itself. Uninstalled choices fall back to the phone default. **APK update required** for the lists; older apps keep the previous two choices and say what an update adds.
+- Removed the model shortcut from Settings: the chip next to the microphone covers model, thinking level and context.
+
 - **Auto-send is back, as an opt-in setting** (Settings → Voice input → Send automatically after speech, off by default). A transcript is sent 2 seconds after you stop speaking, behind a visible countdown with an **Edit** button. Editing, tapping into the draft, attaching images, leaving the app or switching sessions cancel it and keep the transcript. Images always wait for Send, nothing goes to another conversation, and during a model change or compaction it waits instead of dropping the message. Uses a new preference: the pre-3.0 auto-send setting stays ignored, so nobody has it switched on unexpectedly. The APK update carries the setting across the one-time native preference migration; the setting itself works with the current app.
 
 - **Thinking level and compaction.** The new **Model** sheet sets Pi's thinking level for the session (only the levels the model supports; applies to Pi's next request, also while it works) and shows context use with a **Compact conversation** action (Pi's `/compact`). Compaction runs only while Pi is idle, pauses sending but not typing, can be stopped with Stop, and reports success, failure or cancellation.

@@ -52,7 +52,7 @@ globalThis.PiVoicePlayback = (() => {
       else if (kind === 'end') finish(run);
       else if (kind === 'error') fail(detail);
     };
-    function speak(text, language) {
+    function speak(text, language, engine = 'default') {
       stop();
       if (!supported) { onError(bridge ? 'upgrade' : 'unsupported'); return; }
       text = String(text).trim();
@@ -65,7 +65,9 @@ globalThis.PiVoicePlayback = (() => {
       try {
         if (native) {
           arm(run, 20000);
-          bridge.speakText(run.id, text, language);
+          // Newer apps can use a text-to-speech engine chosen in Settings.
+          if (engine !== 'default' && typeof bridge.speakTextWith === 'function') bridge.speakTextWith(run.id, text, language, engine);
+          else bridge.speakText(run.id, text, language);
         } else {
           const parts = chunks(text);
           let index = 0;

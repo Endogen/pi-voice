@@ -23,6 +23,7 @@ final class ReplySpeaker {
     private boolean ready, disposed, focusHeld;
     private int generation;
     private String id, text, language, lastUtterance;
+    private String enginePackage; // null: the phone's default text-to-speech engine.
     private Runnable timeout;
 
     ReplySpeaker(Context context, Handler handler, Events events) {
@@ -33,9 +34,15 @@ final class ReplySpeaker {
             .setAudioAttributes(attributes).setOnAudioFocusChangeListener(change -> { if (change < 0) fail("interrupted"); }, handler).build();
     }
 
-    void speak(String request, String value, String locale) {
+    void speak(String request, String value, String locale, String engineChoice) {
         stop();
         if (disposed) return;
+        // A different engine needs a new TextToSpeech instance.
+        if (!java.util.Objects.equals(engineChoice, enginePackage)) { closeEngine(); enginePackage = engineChoice; }
+        if (enginePackage != null && !SpeechEngines.installedSynthesizer(context, enginePackage)) {
+            if (request != null) { events.emit(request, "error", "engine"); events.emit(request, "end", ""); }
+            return;
+        }
         if (request == null || !request.matches("[a-fA-F0-9-]{36}") || value == null || value.trim().isEmpty() || value.length() > 32000) {
             if (request != null) events.emit(request, "error", "text-limit");
             return;
@@ -49,7 +56,7 @@ final class ReplySpeaker {
         try {
             // Post even an immediate failure: the constructor may invoke onInit
             // before the engine field has been assigned.
-            engine = new TextToSpeech(context, status -> handler.post(() -> {
+            TextToSpeech.OnInitListener initialized = status -> handler.post(() -> {
                 if (disposed || generation != attempt) return;
                 ready = status == TextToSpeech.SUCCESS;
                 if (!ready) { fail("unavailable"); closeEngine(); return; }
@@ -66,7 +73,8 @@ final class ReplySpeaker {
                     }); }
                 });
                 begin();
-            }));
+            });
+            engine = enginePackage == null ? new TextToSpeech(context, initialized) : new TextToSpeech(context, initialized, enginePackage);
         } catch (RuntimeException error) { fail("unavailable"); closeEngine(); }
     }
 

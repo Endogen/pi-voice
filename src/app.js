@@ -69,6 +69,7 @@ const playback = globalThis.PiVoicePlayback.create({
       language: 'No voice for this language. Check Read-aloud language in Settings and install a matching Android voice.',
       'text-limit': 'This reply is too long to read aloud (maximum 32000 characters).',
       'audio-busy': 'Audio is busy. Stop other playback and try Read aloud again.',
+      engine: 'The read-aloud engine chosen in Settings is not installed anymore. Choose another one.',
       interrupted: 'Read aloud stopped.',
     };
     notice(hints[code] || 'Could not read the reply. Check your text-to-speech engine/installed voices and try again.', true);
@@ -78,13 +79,10 @@ const imageLimits = globalThis.PiVoiceImageLimits;
 const sessionStarting = () => state?.newSessionAction?.status === 'starting';
 const SpeechRecognition = globalThis.PiVoiceNativeRecognition || window.SpeechRecognition || window.webkitSpeechRecognition;
 $('language').value = storage.get('language') || navigator.language || 'en-US';
-let engine;
-function setEngine(value) {
-  engine = value === 'termux' ? 'termux' : 'browser';
-  $('engine-browser').setAttribute('aria-checked', String(engine === 'browser'));
-  $('engine-termux').setAttribute('aria-checked', String(engine === 'termux'));
-}
-setEngine(storage.get('engine') || (SpeechRecognition ? 'browser' : 'termux'));
+const speechEngines = globalThis.PiVoiceSpeechEngines.create({
+  element: $, createElement: (tag) => document.createElement(tag), bridge: window.PiVoiceAndroid, storage, webSpeech: Boolean(SpeechRecognition),
+  changed: () => { if (!listening) $('listening').textContent = speechHint(); controls(); },
+});
 $('awake').checked = storage.get('awake') !== 'false';
 // A new key: the pre-3.0 "autosend" preference stays ignored rather than
 // silently switching sending without review back on.
@@ -155,15 +153,15 @@ window.__piVoiceAlerts = alertHint;
 // independent host. The allowlist excludes tokens and session selection.
 window.__piVoiceRestorePreferences = (values) => {
   const booleans = ['awake', 'notify', 'sound', 'haptics', 'auto-send'];
-  const strings = ['language', 'engine', 'read-language'];
+  const strings = ['language', 'engine', 'read-language', 'speech-service', 'read-engine'];
   for (const key of [...booleans, ...strings, 'notify-asked', 'terminal-warned']) {
     const value = values?.[key];
-    if (typeof value !== 'string' || value.length > 128) continue;
+    if (typeof value !== 'string' || value.length > 400) continue;
     try { localStorage.setItem(`pi-voice-${key}`, value); } catch {}
     if (booleans.includes(key)) $(key).checked = value === 'true';
-    if (key === 'engine') setEngine(value);
-    else if (strings.includes(key)) $(key).value = value;
+    if (['language', 'read-language'].includes(key)) $(key).value = value;
   }
+  speechEngines.restore(values || {});
   syncAlerts(); controls();
 };
 
@@ -304,7 +302,6 @@ function controls() {
   setText('model-chip-level', chip.level);
   $('model-chip-level').hidden = !chip.level;
   $('open-model').setAttribute('aria-label', `Model: ${chip.name}${chip.levelName ? `, thinking level ${chip.levelName}` : ''}`);
-  $('settings-model').disabled = !sessionReady();
   $('listening').classList.toggle('live', listening);
   header();
   versions();
@@ -317,8 +314,7 @@ function controls() {
   for (const button of attachmentButtons) button.disabled = switching || sending || listening || preparingImages;
   $('microphone').disabled = switching || sending || preparingImages || (!sessionReady() && !listening);
   $('clear').disabled = switching || sending || listening || preparingImages;
-  $('engine-browser').disabled = listening;
-  $('engine-termux').disabled = listening;
+  speechEngines.lock(listening);
   $('language').disabled = listening;
   $('draft').readOnly = switching || listening || sending || preparingImages;
   $('microphone').setAttribute('aria-pressed', String(listening));
@@ -496,7 +492,7 @@ function readReply() {
   const target = readingTarget();
   if (!target || listening || document.hidden) return;
   readingSourceKey = target.key;
-  playback.speak(globalThis.PiVoiceMarkdown.speechText(target.text), $('read-language').value.trim());
+  playback.speak(globalThis.PiVoiceMarkdown.speechText(target.text), $('read-language').value.trim(), speechEngines.voice);
 }
 function imageSupportError() {
   if (!state?.imageAttachments) return 'Restart Pi once to enable image attachments, then refresh this page.';
@@ -865,7 +861,7 @@ async function startSpeech() {
       else notice(attachments.length ? 'Transcript and images ready. Review them, then tap Send.' : 'Transcript ready. Review it, then tap Send to Pi.');
     } else if (!error) notice('No speech detected. Try again.', true);
   };
-  if (engine === 'browser') {
+  if (speechEngines.mode === 'browser') {
     if (!SpeechRecognition) {
       error = true;
       notice('Speech recognition is unavailable. Use the Termux:API engine in Settings or your keyboard’s microphone.', true);
@@ -873,6 +869,7 @@ async function startSpeech() {
       return;
     }
     const engine = new SpeechRecognition();
+    engine.service = speechEngines.service;
     recognition = engine;
     engine.lang = $('language').value.trim() || 'en-US';
     engine.continuous = false;
@@ -896,6 +893,7 @@ async function startSpeech() {
         'no-speech': 'No speech detected. Try again.',
         'language-not-supported': 'Try another speech language in settings.',
         'service-not-allowed': 'Speech service is unavailable. Try the Termux:API engine.',
+        'service-unavailable': 'The speech service chosen in Settings is not available. Choose another one in Settings.',
         'aborted': 'Listening cancelled.',
       };
       notice(hints[event.error] || `Speech error: ${event.error}. Try the Termux:API engine.`, true);
@@ -978,14 +976,6 @@ $('language').addEventListener('change', () => {
   storage.set('language', $('language').value);
   controls();
 });
-for (const value of ['browser', 'termux']) {
-  $(`engine-${value}`).addEventListener('click', () => {
-    if (listening) return;
-    setEngine(value);
-    storage.set('engine', value);
-    controls();
-  });
-}
 $('auto-send').addEventListener('change', () => {
   storage.set('auto-send', String($('auto-send').checked));
   if (!$('auto-send').checked) cancelAutoSend('Auto-send cancelled. Tap Send when ready.');
@@ -997,6 +987,7 @@ for (const name of ['sessions', 'activity', 'history', 'settings', 'model']) {
     if (name === 'history') renderMessages(state?.messages || []);
     if (name === 'sessions') { renderSessions(); void pollSessions(); }
     if (name === 'activity') { renderActivity(); void pollActivity(); }
+    if (name === 'settings') speechEngines.refresh();
     dialog.showModal();
     if (name === 'model') { controls(); void modelPicker.open(); }
   });
@@ -1081,7 +1072,6 @@ $('thinking').addEventListener('click', () => $('open-activity').click());
 $('reconnect').addEventListener('click', reconnect);
 $('restore-banner').addEventListener('click', () => $('open-sessions').click());
 $('open-terminal').addEventListener('click', () => { void openTerminal(); });
-$('settings-model').addEventListener('click', () => { $('settings-dialog').close(); $('open-model').click(); });
 $('sessions-new').addEventListener('click', () => { $('sessions-dialog').close(); void startNewSession(); });
 setInterval(() => {
   if (document.hidden) return;

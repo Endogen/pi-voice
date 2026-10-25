@@ -24,7 +24,7 @@ class Element {
   click() { this.clicked = (this.clicked || 0) + 1; return this.listeners.click?.(); }
   scrollIntoView() { throw new Error('Conversation updates must not force-scroll.'); }
 }
-async function setup({ auto = false, autoSend = false, speech = true, awake = true, confirmed = true, native = false, playback = false, nativePlayback = true, nativeTerminal = true, nativeReconnect = true, nativeAlerts = true, alertStatus = 'on', initialState } = {}) {
+async function setup({ auto = false, autoSend = false, engines, speech = true, awake = true, confirmed = true, native = false, playback = false, nativePlayback = true, nativeTerminal = true, nativeReconnect = true, nativeAlerts = true, alertStatus = 'on', initialState } = {}) {
   const elements = new Map();
   const prompts = [];
   const instances = [];
@@ -35,6 +35,12 @@ async function setup({ auto = false, autoSend = false, speech = true, awake = tr
     stopSpeech: (id) => nativeCalls.push({ method: 'stop', id }),
     abortSpeech: (id) => nativeCalls.push({ method: 'abort', id }),
     notificationHandled: (handle, sessionId, opened) => nativeCalls.push({ method: 'notification', handle, sessionId, opened }),
+    ...(engines ? {
+      speechServices: () => JSON.stringify(engines.speech),
+      readAloudEngines: () => JSON.stringify(engines.voices),
+      startSpeechWith: (id, lang, service) => nativeCalls.push({ method: 'start', id, lang, service }),
+      speakTextWith: (id, text, language, engine) => nativeCalls.push({ method: 'read', id, text, language, engine }),
+    } : {}),
     ...(nativePlayback ? {
       speakText: (id, text, language) => nativeCalls.push({ method: 'read', id, text, language }),
       stopReading: (id) => nativeCalls.push({ method: 'stop-reading', id }),
@@ -867,7 +873,7 @@ test('backgrounding browser speech cancels without sending', async () => {
 
 test('backgrounding Termux fallback aborts recording and never auto-sends a late result', async () => {
   const h = await setup({ auto: true, speech: false });
-  h.el('engine-termux').click();
+  assert.equal(vm.runInContext('speechEngines.mode', h.context), 'termux', 'Without any speech recognition, Termux:API is used');
   h.el('draft').value = 'keep this draft';
   let complete, signal;
   h.network.listen = (requestSignal) => { signal = requestSignal; return new Promise((resolve) => { complete = resolve; }); };
@@ -2171,17 +2177,55 @@ test('the page asks with its own dialog: declining keeps everything and Escape d
   assert.equal(await answer, false);
 });
 
-test('the speech engine is a page-drawn choice that is saved and locked while recording', async () => {
-  const h = await setup();
-  assert.equal(h.el('engine-browser').attributes['aria-checked'], 'true');
-  h.el('engine-termux').click();
-  assert.equal(h.el('engine-termux').attributes['aria-checked'], 'true');
-  assert.equal(h.el('engine-browser').attributes['aria-checked'], 'false');
-  assert.equal(h.values.get('pi-voice-engine'), 'termux');
-  vm.runInContext("window.__piVoiceRestorePreferences({ engine: 'browser' })", h.context);
-  assert.equal(h.el('engine-browser').attributes['aria-checked'], 'true');
+const engineRows = (h, id) => h.el(id).children || [];
+const engineRow = (h, id, choice) => engineRows(h, id).find((row) => row.dataset.id === choice);
+
+test('installed speech services and text-to-speech engines can be chosen, and an uninstalled one falls back', async () => {
+  const whisper = 'org.woheller69.whisperplus/.RecognitionService';
+  const engines = {
+    speech: [{ id: 'com.google.android.as/.Recognizer', label: 'Google', default: true }, { id: whisper, label: 'Whisper+', default: false }, { id: 'on-device', label: 'Android on-device recognition', default: false }],
+    voices: [{ id: 'com.google.android.tts', label: 'Speech Services by Google', default: true }, { id: 'org.woheller69.ttsengine', label: 'SherpaTTS', default: false }],
+  };
+  const h = await setup({ native: true, engines, playback: true });
+  assert.deepEqual(engineRows(h, 'speech-engines').map((row) => row.dataset.id), ['default', 'com.google.android.as/.Recognizer', whisper, 'on-device', 'termux']);
+  assert.match(textOf(engineRow(h, 'speech-engines', 'default')), /Android’s selected service: Google/);
+  assert.equal(engineRow(h, 'speech-engines', 'default').attributes['aria-checked'], 'true');
+  engineRow(h, 'speech-engines', whisper).click();
+  assert.equal(h.values.get('pi-voice-speech-service'), whisper);
+  assert.equal(engineRow(h, 'speech-engines', whisper).attributes['aria-checked'], 'true');
   h.el('microphone').click();
-  assert.equal(h.el('engine-termux').disabled, true);
+  assert.deepEqual(h.nativeCalls.find((call) => call.method === 'start'), { method: 'start', id: h.nativeCalls.find((call) => call.method === 'start').id, lang: 'en-US', service: whisper });
+  assert.equal(engineRows(h, 'speech-engines').every((row) => row.disabled), true, 'Locked while recording');
+  assert.deepEqual(engineRows(h, 'read-engines').map((row) => row.dataset.id), ['default', 'com.google.android.tts', 'org.woheller69.ttsengine']);
+  engineRow(h, 'read-engines', 'org.woheller69.ttsengine').click();
+  assert.equal(h.values.get('pi-voice-read-engine'), 'org.woheller69.ttsengine');
+  assert.equal(vm.runInContext('speechEngines.voice', h.context), 'org.woheller69.ttsengine');
+  vm.runInContext("cancelRecording(); playback.speak('Hello', 'en-US', speechEngines.voice)", h.context);
+  assert.equal(h.nativeCalls.findLast((call) => call.method === 'read').engine, 'org.woheller69.ttsengine');
+  // Uninstalled while the app ran: Settings reads the lists again when it opens.
+  engines.speech = engines.speech.filter((item) => item.id !== whisper);
+  engines.voices = engines.voices.slice(0, 1);
+  h.el('open-settings').click();
+  assert.equal(engineRow(h, 'speech-engines', 'default').attributes['aria-checked'], 'true');
+  assert.match(h.el('speech-engines-hint').textContent, /no longer installed/);
+  assert.equal(vm.runInContext('speechEngines.service', h.context), 'default');
+  assert.equal(vm.runInContext('speechEngines.voice', h.context), 'default');
+});
+
+test('older apps and plain browsers keep their speech choices and explain what an update adds', async () => {
+  const old = await setup({ native: true });
+  assert.deepEqual(engineRows(old, 'speech-engines').map((row) => row.dataset.id), ['default', 'termux']);
+  assert.match(old.el('speech-engines-hint').textContent, /Update the Pi Voice app/);
+  assert.equal(old.el('read-engines').hidden, true);
+  assert.match(old.el('read-engines-hint').textContent, /Update the Pi Voice app/);
+  engineRow(old, 'speech-engines', 'termux').click();
+  assert.deepEqual([old.values.get('pi-voice-speech-service'), old.values.get('pi-voice-engine')], ['termux', 'termux']);
+  old.el('microphone').click(); await flush();
+  assert.equal(old.requests.some((entry) => entry.path === '/api/listen'), true, 'Termux:API records through Pi');
+  const browser = await setup();
+  assert.match(textOf(engineRow(browser, 'speech-engines', 'default')), /Browser speech/);
+  vm.runInContext("window.__piVoiceRestorePreferences({ engine: 'termux' })", browser.context);
+  assert.equal(engineRow(browser, 'speech-engines', 'termux').attributes['aria-checked'], 'true', 'A migrated pre-list preference still applies');
 });
 
 test('failed replies retain partial output, show retry activity and do not play success feedback', async () => {
