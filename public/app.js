@@ -117,7 +117,7 @@ globalThis.PiVoiceMarkdown = (() => {
 ;
 globalThis.PiVoiceImageLimits = Object.freeze({"maxCount":4,"maxImageBytes":3145728,"maxTotalBytes":8388608,"maxRequestBytes":12582912,"maxOriginalBytes":15728640,"maxEdge":2048,"maxPixels":40000000});
 ;
-globalThis.PiVoiceVersion = "3.0.0";
+globalThis.PiVoiceVersion = "3.1.0";
 ;
 // Android WebView adapter: routes speech recognition to the native app.
 // Without the native bridge, the Web Speech / Termux:API path is used.

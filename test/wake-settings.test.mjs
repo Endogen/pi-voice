@@ -4,6 +4,7 @@ import { mkdtemp, rm, writeFile, stat } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { createWakeSettings } from '../wake-settings.mjs';
+import { configureTestModels } from './fixtures/test-models.mjs';
 
 test('the backend remembers enabled and disabled wake preferences across cold starts', async (t) => {
   const directory = await mkdtemp(join(tmpdir(), 'pi-voice-wake-settings-'));
@@ -17,4 +18,13 @@ test('the backend remembers enabled and disabled wake preferences across cold st
   }
   await writeFile(join(directory, 'wake-settings.json'), '{}');
   await assert.rejects(createWakeSettings(directory).load(), /Could not read/);
+});
+
+test('real-Pi integration fixtures disable Android wake locks even with the Termux default', async (t) => {
+  const directory = await mkdtemp(join(tmpdir(), 'pi-voice-integration-wake-'));
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  await configureTestModels(directory);
+  const voice = join(directory, 'voice');
+  assert.equal(await createWakeSettings(voice, true).load(), false);
+  assert.equal((await stat(join(voice, 'wake-settings.json'))).mode & 0o777, 0o600);
 });
