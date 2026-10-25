@@ -13,7 +13,7 @@ delete process.env.TMUX_PANE;
 const temp = await mkdtemp(join(tmpdir(), 'pi-voice-test-'));
 process.env.PI_CODING_AGENT_DIR = temp;
 process.env.PI_VOICE_RPC = '1';
-const { default: install, stateDir } = await import('../extension.mjs');
+const { default: install, stateDir, createTerminal } = await import('../extension.mjs');
 after(() => rm(temp, { recursive: true, force: true }));
 
 function harness(mode = 'rpc', options = {}) {
@@ -44,6 +44,99 @@ async function endpoint() {
   const names = await readdir(join(stateDir, 'endpoints'));
   return JSON.parse(await readFile(join(stateDir, 'endpoints', names[0]), 'utf8'));
 }
+
+test('terminal lookup retries failures without blocking polls or starting overlapping tmux commands', async () => {
+  let time = 0;
+  let attempts = 0;
+  let complete;
+  const terminal = createTerminal({
+    now: () => time,
+    detect: () => { attempts++; return new Promise((resolve) => { complete = resolve; }); },
+  });
+  const flush = () => new Promise((resolve) => setImmediate(resolve));
+  assert.deepEqual(terminal(), {});
+  await flush();
+  assert.equal(attempts, 1);
+  time = 60000;
+  for (let i = 0; i < 10; i++) assert.deepEqual(terminal(), {});
+  await flush();
+  assert.equal(attempts, 1, 'Even slow probes have only one command in flight');
+  complete({});
+  await flush();
+  for (const elapsed of [0, 4999]) {
+    time = 60000 + elapsed;
+    assert.deepEqual(terminal(), {});
+    await flush();
+    assert.equal(attempts, 1, 'Failures wait five seconds before retrying');
+  }
+  time = 65000;
+  assert.deepEqual(terminal(), {});
+  await flush();
+  assert.equal(attempts, 2);
+  complete({ session: 'pi-voice-abcdef12' });
+  await flush();
+  assert.deepEqual(terminal(), { session: 'pi-voice-abcdef12' });
+  time += 60000;
+  assert.deepEqual(terminal(), { session: 'pi-voice-abcdef12' });
+  await flush();
+  assert.equal(attempts, 2, 'A valid terminal stays cached');
+});
+
+for (const asynchronous of [false, true]) test(`terminal lookup recovers from a ${asynchronous ? 'rejected' : 'throwing'} probe`, async () => {
+  let time = 0;
+  let attempts = 0;
+  const terminal = createTerminal({
+    now: () => time,
+    detect: () => {
+      if (++attempts > 1) return Promise.resolve({ session: 'pi-voice' });
+      const error = new Error('tmux temporarily unavailable');
+      if (asynchronous) return Promise.reject(error);
+      throw error;
+    },
+  });
+  const flush = () => new Promise((resolve) => setImmediate(resolve));
+  assert.deepEqual(terminal(), {});
+  await flush();
+  assert.deepEqual(terminal(), {});
+  assert.equal(attempts, 1);
+  time = 5000;
+  assert.deepEqual(terminal(), {});
+  await flush();
+  assert.deepEqual(terminal(), { session: 'pi-voice' });
+  assert.equal(attempts, 2);
+});
+
+test('state, session summaries and activity expose a terminal recovered after startup without a reload', async (t) => {
+  let time = 0;
+  let attempts = 0;
+  let complete;
+  const getTerminal = createTerminal({
+    now: () => time,
+    detect: () => { attempts++; return new Promise((resolve) => { complete = resolve; }); },
+  });
+  const h = harness('rpc', { getTerminal });
+  await h.events.get('session_start')({ reason: 'startup' }, h.ctx);
+  t.after(() => h.events.get('session_shutdown')({ reason: 'quit' }, h.ctx));
+  const ep = await endpoint();
+  const get = async (path) => (await fetch(`${ep.origin}/api/${path}`, { headers: { Authorization: `Bearer ${ep.token}` } })).json();
+  assert.deepEqual((await get('state')).terminal, {});
+  assert.deepEqual((await get('activity')).terminal, {});
+  assert.equal(attempts, 1, 'Unresolved lookup must not block either HTTP response');
+  complete({});
+  await new Promise((resolve) => setImmediate(resolve));
+  time = 4999;
+  assert.deepEqual((await get('state?summary=1')).terminal, {});
+  assert.equal(attempts, 1);
+  time = 5000;
+  assert.deepEqual((await get('activity')).terminal, {});
+  assert.equal(attempts, 2, 'Activity polling also retries failed detection');
+  complete({ session: 'pi-voice' });
+  await new Promise((resolve) => setImmediate(resolve));
+  for (const path of ['state', 'state?summary=1', 'activity']) {
+    assert.deepEqual((await get(path)).terminal, { session: 'pi-voice' });
+  }
+  assert.equal(attempts, 2);
+});
 
 test('extension connects the existing session, queues speech, exposes replies and cleans up on reload', async (t) => {
   const h = harness();

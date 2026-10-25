@@ -461,19 +461,17 @@ test('image-only questions remain visible in the focus view and history after Pi
   assert.equal(h.el('messages').children[1].children[1].textContent, '[1 image attached]');
 });
 
-test('New session confirms, submits only once and clears the draft/history only after a new ID arrives', async () => {
+test('New always spawns once, keeps the original listed and preserves the unsent draft and images', async () => {
   const h = await setup({ auto: true });
   await attach(h);
   h.state.messages = [{ role: 'user', text: 'Old question' }, { role: 'assistant', text: 'Old answer' }];
   h.el('draft').value = 'unsent words';
-  h.el('open-history').listeners.click();
+  h.el('open-history').click();
   await vm.runInContext('poll()', h.context);
-  assert.equal(h.el('new-session').disabled, false);
-  await vm.runInContext('startNewSession()', h.context);
-  await vm.runInContext('startNewSession()', h.context);
-  assert.equal(h.requests.filter((r) => r.path === '/api/session/new').length, 1);
-  const body = h.requests.find((r) => r.path === '/api/session/new').body;
-  assert.equal(body.sessionId, 'session-one');
+  await vm.runInContext('startNewSession(); startNewSession()', h.context);
+  assert.equal(h.requests.filter((r) => r.path === '/api/session/spawn').length, 1);
+  assert.equal(h.requests.some((r) => r.path === '/api/session/new'), false, 'Never replace the original runtime');
+  const { body } = h.requests.find((r) => r.path === '/api/session/spawn');
   assert.ok(body.id);
   assert.equal(h.el('draft').value, 'unsent words');
   assert.equal(h.el('attachments').hidden, false);
@@ -481,22 +479,27 @@ test('New session confirms, submits only once and clears the draft/history only 
   assert.equal(h.el('new-session').disabled, true);
   assert.equal(h.el('send').disabled, true);
   assert.equal(h.el('microphone').disabled, true);
-  h.state.sessionId = 'session-two';
-  h.state.messages = [];
-  await vm.runInContext('poll()', h.context);
+  h.sessions.push({ pid: 200, sessionId: 'session-two', title: 'New session', spawnId: body.id, spawned: true });
+  h.network.state = (pid) => Response.json(pid === '200' ? { ...h.state, pid: 200, sessionId: 'session-two', messages: [] } : h.state);
+  await vm.runInContext('pollSessions()', h.context);
   await flush();
-  assert.equal(h.el('draft').value, '');
+  assert.equal(h.el('draft').value, 'unsent words');
   assert.equal(h.el('draft').readOnly, false);
-  assert.equal(h.el('attachments').hidden, true);
+  assert.equal(h.el('attachments').hidden, false);
   assert.equal(h.el('new-session').disabled, false);
-  assert.equal(h.el('autosend').checked, false);
-  assert.equal(h.values.get('pi-voice-autosend'), 'false');
+  assert.equal(h.el('autosend').checked, true);
   assert.equal(h.el('question-card').hidden, true);
   assert.equal(h.el('latest-answer').textContent, 'Tap the microphone or type a question below.');
   assert.deepEqual(h.el('messages').children, []);
   assert.match(h.el('notice').textContent, /New session ready/);
-  assert.equal(h.requests.filter((r) => r.path === '/api/awake').length, 2, 'New runtime must receive the saved stay-awake preference');
-  assert.deepEqual(h.prompts, []);
+  h.el('open-sessions').click();
+  assert.equal(h.el('session-list').children.length, 2);
+  h.el('session-list').children[0].children[0].click();
+  await flush();
+  assert.match(h.el('latest-answer').innerHTML, /Old answer/);
+  assert.equal(h.el('draft').value, 'unsent words');
+  assert.equal(h.el('attachments').hidden, false);
+  assert.deepEqual(h.prompts, [], 'Nothing is silently sent to either session');
 });
 
 test('cancelling New session leaves the conversation and draft unchanged', async () => {
@@ -504,21 +507,21 @@ test('cancelling New session leaves the conversation and draft unchanged', async
   await attach(h);
   h.el('draft').value = 'keep me';
   await vm.runInContext('startNewSession()', h.context);
-  assert.equal(h.requests.some((r) => r.path === '/api/session/new'), false);
+  assert.equal(h.requests.some((r) => ['/api/session/new', '/api/session/spawn'].includes(r.path)), false);
   assert.equal(h.el('draft').value, 'keep me');
   assert.equal(h.el('attachments').hidden, false);
   assert.equal(h.el('new-session').disabled, false);
 });
 
-test('New session warns when the old conversation is ephemeral rather than claiming it is saved', async () => {
+test('New keeps even an ephemeral original running rather than replacing it or claiming it is saved', async () => {
   const h = await setup();
   h.state.sessionPersistent = false;
   await vm.runInContext('poll()', h.context);
   await vm.runInContext('startNewSession()', h.context);
-  assert.match(h.confirmations[0], /WARNING: Pi was started with --no-session/);
-  h.state.sessionId = 'another-session';
-  await vm.runInContext('poll()', h.context);
-  assert.match(h.el('notice').textContent, /was not saved/);
+  assert.match(h.confirmations[0], /keeps running/);
+  assert.doesNotMatch(h.confirmations[0], /saved/);
+  assert.equal(h.requests.some((r) => r.path === '/api/session/new'), false);
+  assert.equal(h.state.sessionId, 'session-one');
 });
 
 test('New stays available while Pi is busy but never while speech is recording', async () => {
@@ -536,9 +539,9 @@ test('New stays available while Pi is busy but never while speech is recording',
   assert.equal(h.requests.some((r) => ['/api/session/new', '/api/session/spawn'].includes(r.path)), false);
 });
 
-test('New while Pi is busy starts a parallel session and switches to it without replacing the busy one', async () => {
+for (const working of ['busy', 'pending']) test(`New while Pi is ${working} starts a parallel session and can switch back before a reply`, async () => {
   const h = await setup({ auto: true });
-  h.state.busy = true;
+  h.state[working] = true;
   await vm.runInContext('poll()', h.context);
   await vm.runInContext('startNewSession()', h.context);
   assert.match(h.confirmations.at(-1), /keeps running/);
@@ -559,6 +562,19 @@ test('New while Pi is busy starts a parallel session and switches to it without 
   await vm.runInContext('send()', h.context);
   assert.equal(h.prompts.at(-1).sessionId, 'session-two');
   assert.equal(h.requests.find((r) => r.path === '/api/prompt').pid, '200');
+  h.el('open-sessions').click();
+  assert.equal(h.el('session-list').children.length, 2);
+  h.el('session-list').children[0].children[0].click();
+  await flush();
+  assert.equal(h.values.get('pi-voice-session-pid'), '');
+  assert.equal(h.state[working], true, 'The first task is still running, with no reply needed to switch');
+  assert.equal(h.el('thinking').hidden, false);
+  assert.equal(h.el('new-session').disabled, false);
+  h.el('open-sessions').click();
+  assert.equal(h.el('session-list').children.length, 2, 'Both sessions remain in the list');
+  h.el('session-list').children[1].children[0].click();
+  await flush();
+  assert.equal(h.values.get('pi-voice-session-pid'), '200');
 });
 
 test('a background session that finishes is flagged, and switching back clears the flag', async () => {
@@ -613,47 +629,45 @@ test('older backends without session switching keep working', async () => {
   assert.match(h.el('notice').textContent, /Restart Pi once to run sessions in parallel/);
 });
 
-test('unsupported backend or Pi cancellation keeps the draft and re-enables New session', async () => {
+test('unsupported backend and session limit errors keep the draft and re-enable New', async () => {
   const h = await setup();
   h.el('draft').value = 'keep this draft';
-  h.network.newSession = () => Response.json({ error: 'Not found' }, { status: 404 });
-  await vm.runInContext('startNewSession()', h.context);
-  assert.match(h.el('notice').textContent, /Restart Pi once/);
-  assert.equal(h.el('new-session').disabled, false);
-  assert.equal(h.el('draft').value, 'keep this draft');
-  h.network.newSession = (body) => {
-    h.state.newSessionAction = { id: body.id, status: 'error', error: 'Cancelled by another extension' };
-    return Response.json({ ok: true }, { status: 202 });
-  };
-  await vm.runInContext('startNewSession()', h.context);
-  assert.match(h.el('notice').textContent, /Cancelled by another extension/);
-  assert.equal(h.el('new-session').disabled, false);
-  assert.equal(h.el('draft').value, 'keep this draft');
+  for (const status of [404, 501, 409]) {
+    h.network.spawn = () => Response.json({ error: status === 409 ? 'Up to 4 sessions can run at once.' : 'Not supported' }, { status });
+    await vm.runInContext('startNewSession()', h.context);
+    assert.match(h.el('notice').textContent, status === 409 ? /Up to 4 sessions/ : /Restart Pi once/);
+    assert.equal(h.el('new-session').disabled, false);
+    assert.equal(h.el('draft').value, 'keep this draft');
+    assert.equal(h.state.sessionId, 'session-one');
+  }
+  assert.equal(h.requests.some((r) => r.path === '/api/session/new'), false);
 });
 
-test('New session reconnects through bridge shutdown without resubmitting a lost acknowledgement', async () => {
+test('New discovers the spawned Pi after a lost acknowledgement without launching a duplicate', async () => {
   const h = await setup();
-  h.el('draft').value = 'clear only on success';
-  h.network.newSession = () => { throw new TypeError('Network closed during replacement'); };
+  h.el('draft').value = 'keep on success too';
+  h.network.spawn = () => { throw new TypeError('Network closed after launching Pi'); };
   await vm.runInContext('startNewSession()', h.context);
-  h.network.state = () => { throw new TypeError('Old bridge closed'); };
-  await vm.runInContext('poll()', h.context);
-  assert.match(h.el('notice').textContent, /Reconnecting/);
-  assert.equal(h.el('draft').value, 'clear only on success');
-  h.state.sessionId = 'fresh-session';
-  h.network.state = () => Response.json(h.state);
-  await vm.runInContext('poll()', h.context);
-  assert.equal(h.el('draft').value, '');
+  assert.match(h.el('notice').textContent, /Checking whether/);
+  assert.equal(h.el('new-session').disabled, true);
+  await vm.runInContext('startNewSession()', h.context);
+  const { body } = h.requests.find((r) => r.path === '/api/session/spawn');
+  h.sessions.push({ pid: 200, sessionId: 'session-two', spawnId: body.id });
+  h.network.state = (pid) => Response.json(pid === '200' ? { ...h.state, pid: 200, sessionId: 'session-two' } : h.state);
+  await vm.runInContext('pollSessions()', h.context);
+  await flush();
+  assert.equal(h.el('draft').value, 'keep on success too');
   assert.equal(h.el('new-session').disabled, false);
-  assert.equal(h.requests.filter((r) => r.path === '/api/session/new').length, 1);
+  assert.equal(h.values.get('pi-voice-session-pid'), '200');
+  assert.equal(h.requests.filter((r) => r.path === '/api/session/spawn').length, 1);
 });
 
 test('New session timeout never clears an unconfirmed draft', async () => {
   const h = await setup();
   h.el('draft').value = 'still here';
   await vm.runInContext('startNewSession()', h.context);
-  await vm.runInContext('newSessionRequest.deadline = 0; poll()', h.context);
-  assert.match(h.el('notice').textContent, /New session not confirmed/);
+  await vm.runInContext('spawnRequest.deadline = 0; pollSessions()', h.context);
+  assert.match(h.el('notice').textContent, /did not start in time/);
   assert.equal(h.el('draft').value, 'still here');
   assert.equal(h.el('new-session').disabled, false);
 });
@@ -1131,15 +1145,101 @@ test('Open in Termux attaches the native tmux session after a one-time warning',
   assert.equal(h.confirmations.filter((text) => /Ctrl\+B/.test(text)).length, 1, 'The warning is shown once');
   h.state.terminal = { session: 'pi-voice; rm -rf ~' };
   await vm.runInContext('poll()', h.context);
+  const calls = h.nativeCalls.length;
   h.el('open-terminal').click();
-  assert.equal(h.nativeCalls.at(-1).session, '', 'Unexpected names only open Termux');
+  assert.equal(h.el('open-terminal').disabled, true);
+  assert.equal(h.nativeCalls.length, calls, 'Never open an unrelated Termux tab for an unknown target');
+});
+
+test('legacy backends and user-run Pi do not offer an unrelated Termux tab as this session’s terminal', async () => {
+  const h = await setup({ native: true });
+  assert.equal(h.el('open-terminal').disabled, true);
+  assert.equal(h.el('version-hint').hidden, false, 'Backends predating version reporting still need an update hint');
+  assert.match(h.el('version-hint').textContent, /older Pi Voice.*Restart Pi/);
+  assert.match(h.el('terminal-hint').textContent, /Restart Pi/);
+  h.state.voiceVersion = '2.1.1';
+  await vm.runInContext('poll()', h.context);
+  assert.match(h.el('terminal-hint').textContent, /could not identify.*terminal/);
+  assert.doesNotMatch(h.el('terminal-hint').textContent, /was not started/);
+  h.el('open-terminal').click();
+  assert.equal(h.nativeCalls.some((call) => call.method === 'terminal'), false);
+});
+
+for (const source of ['state', 'activity']) test(`a recovered terminal from ${source} polling enables Open in Termux without reconnecting`, async () => {
+  const h = await setup({ native: true });
+  h.state.voiceVersion = '2.1.1';
+  h.state.terminal = {};
+  await vm.runInContext('poll()', h.context);
+  assert.equal(h.el('open-terminal').disabled, true);
+  assert.match(h.el('terminal-hint').textContent, /could not identify.*terminal/);
+  assert.doesNotMatch(h.el('terminal-hint').textContent, /was not started/);
+  const terminal = { session: 'pi-voice-abcdef12' };
+  if (source === 'state') {
+    h.state.terminal = terminal;
+    await vm.runInContext('poll()', h.context);
+  } else {
+    h.network.activity = () => Response.json({ version: 1, steps: [], terminal });
+    h.el('activity-dialog').showModal();
+    await vm.runInContext('pollActivity()', h.context);
+  }
+  assert.equal(h.el('open-terminal').disabled, false);
+  h.el('open-terminal').click();
+  assert.equal(h.nativeCalls.at(-1).session, terminal.session);
+  assert.equal(h.nativeCalls.some((call) => call.method === 'reconnect'), false);
+  assert.deepEqual(h.prompts, [], 'Terminal recovery never sends a prompt');
+});
+
+test('switching sessions retargets Open in Termux and ignores late activity from the previous session', async () => {
+  const h = await setup({ native: true });
+  h.state.busy = true;
+  h.state.terminal = { session: 'pi-voice' };
+  await vm.runInContext('poll()', h.context);
+  let finishActivity;
+  h.network.activity = () => new Promise((resolve) => { finishActivity = resolve; });
+  const previousActivity = vm.runInContext('pollActivity()', h.context);
+  let finishState;
+  h.network.state = (pid) => pid === '200' ? new Promise((resolve) => { finishState = resolve; }) : Response.json(h.state);
+  vm.runInContext('switchTo(200)', h.context);
+  assert.equal(h.el('open-terminal').disabled, true, 'Cannot attach the old terminal during a switch');
+  h.el('open-terminal').click();
+  assert.equal(h.nativeCalls.some((call) => call.method === 'terminal'), false);
+  finishState(Response.json({ ...h.state, pid: 200, sessionId: 'session-two', terminal: { session: 'pi-voice-abcdef12' } }));
+  await flush();
+  finishActivity(Response.json({ terminal: { session: 'pi-voice' }, steps: [] }));
+  await previousActivity;
+  h.el('open-terminal').click();
+  assert.equal(h.nativeCalls.at(-1).session, 'pi-voice-abcdef12');
+  vm.runInContext('switchTo(100)', h.context);
+  await flush();
+  h.el('open-terminal').click();
+  assert.equal(h.nativeCalls.at(-1).session, 'pi-voice');
+});
+
+test('late failed state/activity polls cannot disconnect the newly selected session', async () => {
+  const h = await setup({ native: true });
+  let failState;
+  let failActivity;
+  h.network.state = () => new Promise((_resolve, reject) => { failState = reject; });
+  h.network.activity = () => new Promise((resolve) => { failActivity = resolve; });
+  const previousState = vm.runInContext('poll()', h.context);
+  const previousActivity = vm.runInContext('pollActivity()', h.context);
+  h.network.state = () => Response.json({ ...h.state, pid: 200, sessionId: 'session-two', terminal: { session: 'pi-voice-abcdef12' } });
+  vm.runInContext('switchTo(200)', h.context);
+  failState(new TypeError('Old session connection closed'));
+  failActivity(Response.json({ error: 'Not found' }, { status: 404 }));
+  await Promise.all([previousState, previousActivity]);
+  await flush();
+  assert.equal(h.el('connection').textContent, 'Ready · project');
+  assert.equal(h.el('open-terminal').disabled, false);
+  vm.runInContext('renderActivity()', h.context);
+  assert.doesNotMatch(h.el('activity-list').children[0].textContent, /Restart Pi/);
 });
 
 test('old native shells and plain browsers explain how to reach the terminal instead', async () => {
   const old = await setup({ native: true, nativeTerminal: false });
   vm.runInContext('renderActivity()', old.context);
   assert.equal(old.el('open-terminal').disabled, true);
-  assert.match(old.el('terminal-hint').textContent, /APK 0\.1\.3/);
+  assert.match(old.el('terminal-hint').textContent, /APK 0\.1\.5/);
   const page = await setup();
   page.state.terminal = { session: 'pi-voice' };
   await vm.runInContext('poll()', page.context);

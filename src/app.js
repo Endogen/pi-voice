@@ -24,7 +24,6 @@ let lastFocus = '';
 let optimisticQuestion;
 let wakeInitialized = false;
 let wakeSyncing = false;
-let newSessionRequest;
 let attachments = [];
 let preparingImages = false;
 let attachmentButtons = [];
@@ -67,7 +66,7 @@ const playback = globalThis.PiVoicePlayback.create({
   },
 });
 const imageLimits = globalThis.PiVoiceImageLimits;
-const sessionStarting = () => Boolean(newSessionRequest || state?.newSessionAction?.status === 'starting');
+const sessionStarting = () => state?.newSessionAction?.status === 'starting';
 const SpeechRecognition = globalThis.PiVoiceNativeRecognition || window.SpeechRecognition || window.webkitSpeechRecognition;
 $('autosend').checked = storage.get('autosend') === 'true';
 $('language').value = storage.get('language') || navigator.language || 'en-US';
@@ -121,8 +120,8 @@ function versions() {
   // Versions describe the connected Pi; backends before 1.8.0 report none.
   setText('pi-version', state?.piVersion || (!state ? '—' : state.voiceVersion ? 'Unknown' : 'Restart Pi to show'));
   const backend = state?.voiceVersion;
-  $('version-hint').hidden = !backend || backend === page;
-  if (backend && backend !== page) setText('version-hint', `This Pi still runs the Pi Voice ${backend} backend. Restart Pi after its current task to finish updating.`);
+  $('version-hint').hidden = !state || backend === page;
+  if (state && backend !== page) setText('version-hint', `This Pi still runs ${backend ? `the Pi Voice ${backend}` : 'an older Pi Voice'} backend. Restart Pi after its current task to finish updating.`);
 }
 function controls() {
   const switching = sessionStarting() || Boolean(spawnRequest) || switchPending;
@@ -168,6 +167,7 @@ function controls() {
   $('abort').disabled = !working || sending;
   renderLatest(state?.messages || []);
   readingControls();
+  terminalControls();
 }
 function activityLabel() {
   if (sending) return 'Sending…';
@@ -259,26 +259,26 @@ function terminalControls() {
   const bridge = window.PiVoiceAndroid;
   const capable = typeof bridge?.openTerminal === 'function';
   let hint;
-  if (bridge && !capable) hint = 'Update Pi Voice Native to APK 0.1.3 or newer to open Termux from here.';
+  if (bridge && !capable) hint = 'Update Pi Voice Native to APK 0.1.5 or newer to open Pi’s terminal from here.';
   else if (bridge && session) hint = 'Opens this Pi’s live terminal in Termux. To leave it running, press Ctrl+B then D. Ctrl+C or Ctrl+D would stop Pi.';
-  else if (bridge) hint = 'This Pi runs in a Termux tab you started, so Termux opens on its most recent tab.';
+  else if (bridge && !state?.voiceVersion) hint = 'Restart Pi after its current task to identify this session’s terminal.';
+  else if (bridge) hint = 'The app could not identify this session’s terminal. It will keep checking; you can also open Termux manually.';
   else hint = 'Open this page in Pi Voice Native to switch to Pi’s terminal.';
   $('open-terminal').hidden = !bridge;
-  $('open-terminal').disabled = Boolean(bridge && !capable);
+  $('open-terminal').disabled = !connected || switchPending || !session || !capable;
   setText('terminal-hint', hint);
 }
 function openTerminal() {
   const session = terminalSession();
   const bridge = window.PiVoiceAndroid;
-  if (typeof bridge?.openTerminal === 'function') {
-    if (session && storage.get('terminal-warned') !== 'true') {
+  if (connected && !switchPending && session && typeof bridge?.openTerminal === 'function') {
+    if (storage.get('terminal-warned') !== 'true') {
       if (!confirm('Termux will show Pi’s live terminal. Keys go straight to Pi: Ctrl+C or Ctrl+D would stop it. Press Ctrl+B then D to leave it running.')) return;
       storage.set('terminal-warned', 'true');
     }
     cancelRecording();
     playback.stop();
     bridge.openTerminal(session);
-
   }
 }
 async function pollActivity() {
@@ -291,6 +291,7 @@ async function pollActivity() {
     activitySupported = true;
     activityData = next;
   } catch (error) {
+    if (requested !== targetPid) return;
     if ([404, 501].includes(error.status)) { activitySupported = false; activityData = undefined; }
   } finally {
     activityPolling = false;
@@ -513,72 +514,28 @@ function renderMessages(messages) {
     return article;
   }));
 }
-function checkNewSession(next) {
-  const request = newSessionRequest;
-  if (!request) return false;
-  if (next && next.sessionId !== request.sessionId) {
-    newSessionRequest = undefined;
-    pendingMessage = undefined;
-    optimisticQuestion = undefined;
-    $('draft').value = '';
-    setAttachments([]);
-    $('autosend').checked = false;
-    storage.set('autosend', 'false');
-    notice(request.persistent ? 'New session ready. Your previous conversation remains saved in Pi.' : 'New session ready. The previous session was ephemeral (--no-session) and was not saved.');
-    return true;
-  }
-  const action = next?.newSessionAction;
-  if (action?.id === request.id && action.status === 'error') {
-    newSessionRequest = undefined;
-    notice(action.error || 'Could not start a new session. Your draft is kept.', true);
-    return true;
-  }
-  if (Date.now() >= request.deadline) {
-    newSessionRequest = undefined;
-    notice('New session not confirmed. Your draft is kept. Check the connected session before trying again.', true);
-    return true;
-  }
-  return false;
-}
 async function startNewSession() {
-  if (!connected || sessionStarting() || spawnRequest || sending || listening || preparingImages) return;
-  // A busy Pi keeps working: the new conversation gets its own Pi beside it.
-  if (busyHere()) { await startParallelSession(); return; }
-  const persistent = state.sessionPersistent !== false;
-  const saved = persistent ? 'Your current conversation stays saved in Pi.' : 'WARNING: Pi was started with --no-session. This conversation will not be saved.';
-  if (!confirm(`Start a new session? ${saved} Any unsent draft and attached images will be cleared once the new session is ready.`)) return;
-  const request = { id: crypto.randomUUID(), sessionId: state.sessionId, persistent, deadline: Date.now() + 30000 };
-  newSessionRequest = request;
-  notice('Starting a new session…');
-  controls();
-  try {
-    await api('session/new', { method: 'POST', body: { id: request.id, sessionId: request.sessionId } });
-    await poll();
-  } catch (error) {
-    if (newSessionRequest === request && error.status && error.status !== 503) {
-      newSessionRequest = undefined;
-      notice([404, 501].includes(error.status) ? 'Restart Pi once to enable the New session button. Your conversation and draft are kept.' : `${error.message} Your draft is kept.`, true);
-    } else if (newSessionRequest === request) {
-      // The old bridge may close before its acknowledgement reaches this tab.
-      // Reconnect and observe the session ID, never automatically repeat POST.
-      notice('Reconnecting while Pi starts the new session…');
-    }
-  } finally { controls(); }
-}
-async function startParallelSession() {
-  if (!sessionsSupported) { notice('Pi is busy. Restart Pi once to run sessions in parallel, or stop the current task first.', true); return; }
-  if (!confirm('Pi is still working here. Start a new session alongside it? This one keeps running; switch back any time from Sessions.')) return;
+  if (!connected || sessionStarting() || spawnRequest || switchPending || sending || listening || preparingImages) return;
+  if (!sessionsSupported) { notice('Restart Pi once to run sessions in parallel. Your conversation and draft are kept.', true); return; }
+  // Always keep the current Pi: replacing an idle runtime made its conversation
+  // disappear from Sessions, even though it was still saved on disk.
+  if (!confirm('Start a new session alongside this one? This one keeps running; switch back any time from Sessions. Your unsent draft and images stay in the composer.')) return;
   const request = { id: crypto.randomUUID(), deadline: Date.now() + 45000 };
   spawnRequest = request;
-  notice('Starting a parallel session…');
+  notice('Starting a new session…');
   controls();
   try {
     await api('session/spawn', { method: 'POST', body: { id: request.id } });
     await pollSessions();
   } catch (error) {
-    if (spawnRequest === request) {
+    if (spawnRequest === request && error.status) {
       spawnRequest = undefined;
-      notice(error.status === 404 ? 'Restart Pi once to run sessions in parallel. Your conversation and draft are kept.' : error.message, true);
+      notice([404, 501].includes(error.status) ? 'Restart Pi once to run sessions in parallel. Your conversation and draft are kept.' : `${error.message} Your draft is kept.`, true);
+    } else if (spawnRequest === request) {
+      // A lost acknowledgement does not mean the Pi failed to start. Discover
+      // its spawn ID; never repeat POST or launch a duplicate automatically.
+      notice('Checking whether the new session started…');
+      await pollSessions();
     }
   } finally { controls(); }
 }
@@ -608,6 +565,7 @@ function selectTarget(pid) {
   lastMessages = '';
   unread.delete(pid);
   activityData = undefined;
+  activitySupported = true;
   expandedSteps.clear();
   cancelRecording();
   playback.stop();
@@ -736,7 +694,7 @@ function renderSessions() {
   $('stopped-section').hidden = !stopped.length;
   $('stopped-list').replaceChildren(...stopped.map(stoppedRow));
   $('sessions-hint').textContent = sessionsSupported
-    ? 'A new session started while Pi is working runs alongside it. Up to 4 sessions can run at once; each stays saved in Pi.'
+    ? 'New sessions always run alongside this one, even while Pi is working. Switch back any time. Up to 4 sessions can run at once.'
     : 'Restart Pi once to run and switch between parallel sessions.';
 }
 async function pollSessions() {
@@ -821,17 +779,15 @@ async function poll() {
       notice('Connected. Ready when you are.');
       void pollSessions();
     }
-    checkNewSession(next);
     if ($('history-dialog').open) renderMessages(next.messages);
   } catch (error) {
+    if (requested !== targetPid) { stale = true; return; }
     connected = false;
     offline = true;
     setText('connection', 'Disconnected');
     $('connection').classList.toggle('disconnected', true);
     if (error.status !== 401) wakeInitialized = false;
-    if (newSessionRequest) {
-      if (!checkNewSession()) notice('Reconnecting while Pi starts the new session…');
-    } else if (error.status === 401) notice(error.message, true);
+    if (error.status === 401) notice(error.message, true);
     else if (reconnectOnFailure && canReconnect()) { reconnectOnFailure = false; reconnect(); }
     else notice(canReconnect() ? 'Pi isn’t running. Tap Reconnect to start it and resume your conversation.'
       : window.PiVoiceAndroid ? 'Pi isn’t running. Update Pi Voice Native to reconnect from here, or close the app and tap its icon.'

@@ -89,8 +89,8 @@ The chat shows complete messages, not the reply token by token. To follow a repl
 
 Tap **+** to start a new conversation:
 
-- **While Pi is idle,** the connected Pi switches to a fresh session after you confirm. The previous conversation stays saved in Pi.
-- **While Pi is working,** a second Pi starts in the same folder and the app switches to it. The busy one keeps running.
+- After you confirm, a **separate Pi** starts in the same folder and the app switches to it, whether the first Pi is idle or working.
+- The first Pi keeps running and stays in **Sessions**. You can switch back immediately, without waiting for its reply. If the backend cannot start another Pi, New explains the error and leaves the original untouched.
 
 Tap the session title to see all running sessions and switch between them. The number beside the title counts them and turns blue when a background session finishes a reply. Your draft stays in the composer when you switch; it is never moved into another conversation silently.
 
@@ -106,7 +106,7 @@ Tap the working line, or the terminal button beside the reply, to open **Activit
 
 The log covers the current task (up to 60 steps) and is kept only in that Pi's memory.
 
-**Open in Termux** at the bottom of the sheet shows Pi's actual terminal. For a Pi started by the app, it opens a Termux tab attached to that exact Pi. For a Pi you started yourself, Android has no way to select its tab, so Termux opens on its most recent tab.
+**Open in Termux** at the bottom of the sheet shows Pi's actual terminal. For a Pi started by the app, it opens a Termux tab attached to that exact Pi. This needs APK **0.1.5+** and a current running backend. Failed terminal lookups are retried automatically while the app polls, so a temporary detection failure does not require restarting Pi. For a Pi you started yourself outside the app's tmux server, Android cannot select its original tab: the button explains that you must open that tab manually, rather than opening an unrelated shell.
 
 > In the attached terminal, keys go straight to Pi: **Ctrl+C or Ctrl+D stops it.** Press **Ctrl+B, then D** to leave it running and return to the app.
 
@@ -153,7 +153,7 @@ npm run setup
 ```
 
 - **Interface changes** apply when you reopen the app.
-- **Backend changes** need a Pi restart. Wait until Pi is idle, open **Activity → Open in Termux**, press **Ctrl+D** at the empty prompt, then open the app again: it starts Pi and reopens your conversation. **Settings → About** shows whether a session still runs the old backend.
+- **Backend changes** need a Pi restart. Wait until Pi is idle, open **Activity → Open in Termux**, press **Ctrl+D** at the empty prompt, then open the app again: it starts Pi and reopens your conversation. If Open in Termux is unavailable with an old backend, open Termux yourself and run `tmux -L pi-voice-native attach-session -t =pi-voice` for the app's initial Pi (use `tmux -L pi-voice-native ls` to see other managed sessions). For a Pi started manually, use its original tab. **Settings → About** shows whether a session still runs the old backend, including backends too old to report a version. Reopening the app or installing an APK does not reload a running extension.
 - **App updates:** download or build the new APK, then run `npm run native:install`. Updates must be signed with the same key as the installed app; see [native/README.md](native/README.md#build-on-termux).
 
 [CHANGELOG.md](CHANGELOG.md) lists what changed in each version.
@@ -192,7 +192,7 @@ To rotate the token, quit all Pi instances, delete `~/.pi/agent/voice/token` and
 | "Several Pi sessions you started yourself are running" | The app won't guess which one to connect to. Quit the extra Pis in Termux. Sessions started with **+** don't count. |
 | New while busy says tmux is missing | `pkg install tmux` |
 | Activity, About or Restore ask for a Pi restart | That Pi still runs an older backend; see [Updating](#updating). |
-| Open in Termux is greyed out | Install the current APK. |
+| Open in Termux is greyed out | Install APK 0.1.5+, restart an older Pi backend, and wait for the selected session to connect. Current backends retry failed terminal lookups after a five-second cooldown; give the app a few seconds to recover. For a manually started Pi outside native tmux, use its original Termux tab. |
 | Pi stopped after Open in Termux | Ctrl+C or Ctrl+D reached Pi. Use Ctrl+B, then D next time; tap **Reconnect** to restart it. |
 | Images are rejected | Select a vision-capable model in Pi, and use JPEG, PNG or WebP within the limits. |
 | Microphone denied | Android Settings → Apps → Pi Voice Native → Permissions → Microphone. |

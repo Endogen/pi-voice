@@ -3,26 +3,32 @@
 import assert from 'node:assert/strict';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
-import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, rm, writeFile, symlink } from 'node:fs/promises';
 import { join } from 'node:path';
 import { homedir, tmpdir } from 'node:os';
 import { randomUUID } from 'node:crypto';
-import { fileURLToPath } from 'node:url';
 import { setTimeout as delay } from 'node:timers/promises';
 import { runNativeHost } from './host.mjs';
 import { discoverConnections, waitForConnection } from './connection.mjs';
 import { stoppedRecords, writeRecord } from '../running.mjs';
+import { detectTerminal } from '../extension.mjs';
 
 const directory = await mkdtemp(join(tmpdir(), 'pi-voice-native-pty-'));
 const socket = `pi-voice-test-${randomUUID().slice(0, 8)}`;
 const tmux = join(process.env.PREFIX || '/data/data/com.termux/files/usr', 'bin/tmux');
 const exec = promisify(execFile);
+const isolatedExtension = join(directory, 'voice-extension.mjs');
 const options = {
   directory: join(directory, 'voice'), socket, interval: 100,
   pi: join(homedir(), '.pi/agent/bin/pi'), cwd: directory,
-  args: ['--no-session', '--offline', '--no-context-files', '--no-skills', '--no-prompt-templates', '--no-themes', '--no-tools', '--no-extensions', '--provider', 'openai', '--model', 'gpt-4o', '-e', fileURLToPath(new URL('../extension.mjs', import.meta.url))],
+  args: ['--no-session', '--offline', '--no-context-files', '--no-skills', '--no-prompt-templates', '--no-themes', '--no-tools', '--no-extensions', '--provider', 'openai', '--model', 'gpt-4o', '-e', isolatedExtension],
   env: { ...process.env, PI_CODING_AGENT_DIR: directory, TERM: 'xterm-256color' },
 };
+// Exercise the production launcher and HTTP spawn/relay routes, but force every
+// child onto our isolated tmux server with all user extensions/tools disabled.
+await writeFile(isolatedExtension, `import install, { launchSession } from ${JSON.stringify(new URL('../extension.mjs', import.meta.url).href)};
+export default pi => install(pi, { launch: request => launchSession(request, ${JSON.stringify({ socket, command: [options.pi, ...options.args] })}) });
+`, { mode: 0o600 });
 let hostFailure;
 let resumedHost;
 const host = runNativeHost(options).catch((error) => { hostFailure = error; });
@@ -42,6 +48,44 @@ try {
   const sessions = await exec(tmux, ['-L', socket, 'list-sessions', '-F', '#{session_name}']);
   assert.equal(sessions.stdout.trim(), 'pi-voice', 'Retapping must reuse the same PTY');
 
+  const spawnId = randomUUID();
+  for (let retry = 0; retry < 2; retry++) {
+    const spawned = await fetch(`${url.origin}/api/session/spawn`, {
+      method: 'POST', headers, body: JSON.stringify({ id: spawnId }),
+    });
+    assert.equal(spawned.status, 202, await spawned.text());
+  }
+  let parallel;
+  const spawnDeadline = Date.now() + 25000;
+  while (Date.now() < spawnDeadline) {
+    const list = await fetch(`${url.origin}/api/sessions`, { headers }).then((result) => result.json());
+    parallel = list.sessions.find((item) => item.spawnId === spawnId);
+    if (parallel) { assert.equal(list.sessions.length, 2, 'A retried New creates just one additional Pi'); break; }
+    await delay(100);
+  }
+  assert.ok(parallel, 'The app must discover a real spawned TUI');
+  assert.notEqual(parallel.sessionId, state.sessionId);
+  assert.equal((await fetch(`${url.origin}/api/state`, { headers: { ...headers, 'X-Pi-Voice-Pid': String(parallel.pid) } }).then((result) => result.json())).sessionId, parallel.sessionId, 'Switch to the second Pi through the original bridge');
+  assert.equal((await fetch(`${url.origin}/api/state`, { headers }).then((result) => result.json())).sessionId, state.sessionId, 'Switch back without replacing the original conversation');
+  // Alias only THIS test socket to the validated production basename. Explicit
+  // -S selection must win over the parent test process's live TMUX environment.
+  const socketPath = (await exec(tmux, ['-L', socket, 'display-message', '-p', '#{socket_path}'])).stdout.trim();
+  const socketAlias = join(directory, 'pi-voice-native');
+  await symlink(socketPath, socketAlias);
+  for (const session of (await exec(tmux, ['-L', socket, 'list-sessions', '-F', '#S'])).stdout.trim().split('\n')) {
+    const pane = (await exec(tmux, ['-L', socket, 'display-message', '-p', '-t', `=${session}:0.0`, '#{pane_id}'])).stdout.trim();
+    assert.deepEqual(await detectTerminal({ TMUX: `${socketAlias},0,0`, TMUX_PANE: pane }), { session }, 'Terminal detection resolves the exact Pi, not the ambient tmux client');
+  }
+  const closed = await fetch(`${url.origin}/api/session/close`, {
+    method: 'POST', headers: { ...headers, 'X-Pi-Voice-Pid': String(parallel.pid) }, body: JSON.stringify({ sessionId: parallel.sessionId }),
+  });
+  assert.equal(closed.status, 202, await closed.text());
+  const closeDeadline = Date.now() + 10000;
+  while ((await discoverConnections(options.directory)).length > 1 && Date.now() < closeDeadline) await delay(100);
+  assert.equal((await discoverConnections(options.directory)).length, 1);
+
+  // Keep testing the legacy in-place endpoint for terminal /new compatibility;
+  // the app's New button now uses only spawn so both originals remain listed.
   const response = await fetch(`${url.origin}/api/session/new`, {
     method: 'POST', headers, body: JSON.stringify({ id: randomUUID(), sessionId: state.sessionId }),
   });
@@ -102,7 +146,7 @@ try {
   await exec(tmux, ['-L', socket, 'send-keys', '-t', '=pi-voice:0.0', 'C-d']);
   await Promise.race([resumedHost, delay(10000).then(() => { throw new Error('Resumed host did not exit'); })]);
   if (hostFailure) throw hostFailure;
-  console.log('Native PTY integration passed: real Pi cold start, discovery, retap reuse, new session, same connection, clean exit, failed-start preservation and exact saved-conversation recovery. No provider calls.');
+  console.log('Native PTY integration passed: real Pi cold start, discovery, retap reuse, parallel spawn/retry/list/relay/switch-back/close, exact terminal targets, legacy new session, same connection, clean exit, failed-start preservation and exact saved-conversation recovery. No provider calls.');
 } finally {
   await exec(tmux, ['-L', socket, 'kill-server']).catch(() => {});
   await host;

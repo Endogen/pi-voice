@@ -55,10 +55,27 @@ const tmuxBinary = () => (process.env.PREFIX ? join(process.env.PREFIX, 'bin', '
 export function detectTerminal(env = process.env) {
   const socket = (env.TMUX || '').split(',')[0];
   if (!socket || socket.split('/').at(-1) !== 'pi-voice-native') return Promise.resolve({});
-  return new Promise((resolve) => execFile(tmuxBinary(), ['display-message', '-p', ...(env.TMUX_PANE ? ['-t', env.TMUX_PANE] : []), '#S'], { timeout: 5000 }, (error, stdout) => {
+  return new Promise((resolve) => execFile(tmuxBinary(), ['-S', socket, 'display-message', '-p', ...(env.TMUX_PANE ? ['-t', env.TMUX_PANE] : []), '#S'], { timeout: 5000 }, (error, stdout) => {
     const session = String(stdout || '').trim();
     resolve(!error && /^pi-voice(-[a-f0-9]{8})?$/.test(session) ? { session } : {});
   }));
+}
+
+// Missing metadata can be a transient tmux failure, not an unmanaged Pi.
+// State/summary/activity polls share one non-blocking probe. Retry failures
+// after a cooldown; no background timers or repeated commands once identified.
+export function createTerminal({ detect = detectTerminal, now = Date.now } = {}) {
+  let terminal = {};
+  let pending;
+  let retryAt = 0;
+  return () => {
+    if (!terminal.session && !pending && now() >= retryAt) {
+      pending = Promise.resolve().then(detect)
+        .then((found) => { terminal = found; }, () => {})
+        .finally(() => { retryAt = now() + 5000; pending = undefined; });
+    }
+    return terminal;
+  };
 }
 
 const maxSessions = 4;
@@ -67,12 +84,12 @@ const fail = (status, message) => Object.assign(new Error(message), { status });
 
 // Start another Pi beside this one in the native host's private tmux server.
 // The new Pi publishes its own bridge; the app finds it by its spawn ID.
-export async function launchSession({ id, cwd, args: piArgs = [] }) {
+export async function launchSession({ id, cwd, args: piArgs = [] }, { socket = 'pi-voice-native', command } = {}) {
   const tmux = tmuxBinary();
   const managed = join(homedir(), '.pi', 'agent', 'bin', 'pi');
-  const command = await access(managed).then(() => [managed], () => [process.execPath, process.argv[1]]);
+  command ||= await access(managed).then(() => [managed], () => [process.execPath, process.argv[1]]);
   const env = [`PI_VOICE_SPAWN_ID=${id}`, ...(process.env.PI_CODING_AGENT_DIR ? [`PI_CODING_AGENT_DIR=${process.env.PI_CODING_AGENT_DIR}`] : [])];
-  const args = ['-L', 'pi-voice-native', 'new-session', '-d', '-s', `pi-voice-${randomBytes(4).toString('hex')}`, '-x', '100', '-y', '36', '-c', cwd, ...env.flatMap((item) => ['-e', item]), ...command, ...piArgs];
+  const args = ['-L', socket, 'new-session', '-d', '-s', `pi-voice-${randomBytes(4).toString('hex')}`, '-x', '100', '-y', '36', '-c', cwd, ...env.flatMap((item) => ['-e', item]), ...command, ...piArgs];
   await new Promise((resolve, reject) => execFile(tmux, args, { timeout: 10000 }, (error, _stdout, stderr) => {
     if (!error) return resolve();
     reject(error.code === 'ENOENT'
@@ -86,15 +103,13 @@ function textOf(message) {
   return (message.content || []).filter((part) => part.type === 'text').map((part) => part.text).join('\n');
 }
 
-export default function installVoiceExtension(pi, { wakeLock = createWakeLock({ directory: join(stateDir, 'wake-lock') }), launch = launchSession } = {}) {
+export default function installVoiceExtension(pi, { wakeLock = createWakeLock({ directory: join(stateDir, 'wake-lock') }), launch = launchSession, getTerminal = createTerminal() } = {}) {
   let bridge;
   const spawned = new Set();
   const spawning = new Map();
   let versions = {};
-  let terminal = {};
   const activity = createActivity();
   void detectVersions().then((found) => { versions = found; }, () => {});
-  void detectTerminal().then((found) => { terminal = found; }, () => {});
   let context;
   let starting;
   let newSessionAction;
@@ -114,7 +129,7 @@ export default function installVoiceExtension(pi, { wakeLock = createWakeLock({ 
       spawned: Boolean(spawnId),
       voiceVersion: versions.voice,
       piVersion: versions.pi,
-      terminal,
+      terminal: getTerminal(),
       activity: activity.current(),
       spawnId,
       sessionPersistent: Boolean(context.sessionManager.getSessionFile()),
@@ -180,7 +195,7 @@ export default function installVoiceExtension(pi, { wakeLock = createWakeLock({ 
       const created = await createVoiceBridge({
         token, port,
         getState: snapshot,
-        getActivity: () => ({ ...activity.snapshot(), terminal }),
+        getActivity: () => ({ ...activity.snapshot(), terminal: getTerminal() }),
         listSessions: async () => (await discoverConnections(stateDir)).map(({ url, ...session }) => session),
         // Conversations whose Pi stopped (phone off, Android killed Termux).
         listStopped: async () => (await stoppedRecords(stateDir)).map(({ pid, title, cwd, updated }) => ({ pid, title, cwd, updated })),

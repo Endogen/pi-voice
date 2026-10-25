@@ -396,12 +396,14 @@ public final class MainActivity extends Activity {
                 cancelSpeech("aborted");
                 replySpeaker.stop();
                 if (!name.isEmpty()) {
-                    // A new foreground Termux tab attached to the native tmux
-                    // session. Termux switches to it; this app then brings
-                    // Termux forward while it is still the foreground app.
+                    // Show the tab attached to THIS Pi, not Termux's existing
+                    // tab. SESSION_ACTION is a String: 0 selects the new session
+                    // and opens the Activity; 1 would keep the old tab selected.
+                    // Also bring Termux forward from our foreground Activity
+                    // (Android may block a background service opening it).
                     Intent attach = command(PREFIX + "/bin/tmux", TerminalTarget.attachArguments(name), null);
                     attach.putExtra("com.termux.RUN_COMMAND_BACKGROUND", false);
-                    attach.putExtra("com.termux.RUN_COMMAND_SESSION_ACTION", "1");
+                    attach.putExtra("com.termux.RUN_COMMAND_SESSION_ACTION", "0");
                     attach.putExtra("com.termux.RUN_COMMAND_COMMAND_LABEL", "Pi terminal");
                     try { startService(attach); }
                     catch (RuntimeException error) { Toast.makeText(MainActivity.this, "Termux could not open Pi's terminal. Check ‘Run commands in Termux’.", Toast.LENGTH_LONG).show(); return; }

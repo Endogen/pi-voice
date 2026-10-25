@@ -1,5 +1,15 @@
 # Changelog
 
+## 2.1.1 — native APK 0.1.5 (versionCode 6)
+
+- **New always keeps the original running:** idle and busy sessions use the same parallel-Pi launch. Both remain in Sessions and you can switch back before a reply finishes. Draft text and images stay in the composer and are never auto-submitted on a switch. Failed/unsupported launches leave the original untouched; lost acknowledgements are discovered by request ID without a duplicate launch.
+- **Open in Termux selects the attached Pi:** APK 0.1.5 requests Termux's switch-to-new-session action (`0`, not `1`, which keeps the old tab selected). Terminal detection explicitly selects Pi's own tmux socket. While switching, or when a backend cannot identify its terminal, the button is disabled instead of opening an unrelated tab; late responses from the previous session cannot change the selected terminal or connection status.
+- **Terminal detection recovers:** a failed lookup is no longer cached for the lifetime of Pi. State, session-summary and Activity polls share one non-blocking probe, retry failures after a five-second cooldown, and cache a valid terminal. Missing metadata no longer claims that Pi was not started by the app. Regression tests cover slow/failed/thrown probes, recovery through both HTTP views and automatic button re-enabling.
+- **Older backends:** About now also warns when the running Pi predates version reporting. Such a Pi needs a restart for parallel sessions and terminal targeting; replacing the page or APK alone cannot upgrade an already-running extension.
+- **Regression coverage:** idle/busy/pending creation, round-trip switching with both sessions listed, late state/activity replies, lost launch acknowledgements and terminal targeting. Isolated real-Pi PTY tests exercise the production launcher, retry deduplication, relay/switch-back, close and exact tmux targets. RPC lifecycle tests use RPC `new_session`; the legacy in-place browser route remains covered in the real TUI test.
+
+Reopen the app for the interface changes, restart Pi once **after its current reply finishes**, and install the same-key APK 0.1.5 (`npm run native:install`). A build is not an installed update. No live-session restart or Android installer is run automatically; selecting the attached Termux tab still needs an on-device check.
+
 ## 2.1.0
 
 - **Pull to refresh:** pull down on the conversation (scrolled to the top) to re-sync it, the session list and an open Activity sheet with Pi. When Pi has stopped, the same gesture reconnects. It is built into the page, so no APK update is needed; sideways swipes, scrolled replies and open sheets are left alone.

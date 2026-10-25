@@ -95,15 +95,13 @@ try {
     body: JSON.stringify({ sessionId: state.sessionId }),
   });
   assert.equal(abort.status, 200);
-  // Exercise the browser's control route, not RPC new_session: this must run a
-  // real command context and survive destruction/recreation of the extension.
+  // Exercise real RPC session replacement and extension recreation. App New
+  // now spawns a separate TUI, covered by native/integration.mjs. Internal slash
+  // commands sent by an extension are not dispatched in Pi's RPC mode.
   let previous = state;
   for (let attempt = 0; attempt < 2; attempt++) {
-    const response = await fetch(`${endpoint.origin}/api/session/new`, {
-      method: 'POST', headers: { Authorization: `Bearer ${endpoint.token}`, 'Content-Type': 'application/json' },
-      body: JSON.stringify({ id: `new-session-${attempt}`, sessionId: previous.sessionId }),
-    });
-    assert.equal(response.status, 202, await response.text());
+    const response = await command('new_session');
+    assert.equal(response.success, true, JSON.stringify(response));
     let next;
     const deadline = Date.now() + 25000;
     while (Date.now() < deadline) {
@@ -172,7 +170,7 @@ try {
   assert.equal(exit.code, 0, stderr);
   assert.deepEqual(await readdir(endpoints), []);
   await assert.rejects(fetch(`${endpoint.origin}/api/state`));
-  console.log('PASS: real Pi serves/authenticates the UI, creates two fresh sessions through the browser route, preserves its port/token, rejects stale actions, receives native text+image and image-only inputs once despite retries, aborts and shuts down cleanly. No model/API calls or Android wake-lock changes made.');
+  console.log('PASS: real Pi serves/authenticates the UI, survives two RPC session replacements, preserves its port/token, rejects stale actions, receives native text+image and image-only inputs once despite retries, aborts and shuts down cleanly. No model/API calls or Android wake-lock changes made.');
 } finally {
   if (child.exitCode === null) child.kill('SIGTERM');
   await exited.catch(() => {});

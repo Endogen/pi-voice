@@ -128,6 +128,9 @@ test('native Android contract has fixed commands, non-exported result receiver a
   // The page may only name a validated native tmux session; the command is fixed.
   assert.match(source, /final String name = TerminalTarget\.session\(session\);\s+if \(name == null\) return;/);
   assert.match(source, /command\(PREFIX \+ "\/bin\/tmux", TerminalTarget\.attachArguments\(name\), null\)/);
+  assert.match(source, /attach\.putExtra\("com\.termux\.RUN_COMMAND_BACKGROUND", false\)/);
+  assert.match(source, /attach\.putExtra\("com\.termux\.RUN_COMMAND_SESSION_ACTION", "0"\)/, 'Termux action 0 selects the attached Pi; 1 would keep an unrelated tab selected');
+  assert.doesNotMatch(source, /RUN_COMMAND_SESSION_ACTION", "1"/);
   assert.match(source, /openTerminal[\s\S]*?trustedPage\(\) \|\| !resumed \|\| !web\.hasWindowFocus\(\)/);
   assert.match(manifest, /android.intent.action.TTS_SERVICE/);
   assert.match(source, /replySpeaker\.shutdown\(\)/);
