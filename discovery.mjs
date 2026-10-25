@@ -14,7 +14,7 @@ export async function readEndpoint(directory, pid) {
     if (!loopback.test(endpoint.origin)) return;
     const origin = new URL(endpoint.origin);
     if (Number(origin.port) > 65535 || !origin.port) return;
-    return { pid, origin: origin.origin, token: endpoint.token };
+    return { pid, origin: origin.origin, token: endpoint.token, instanceId: endpoint.instanceId };
   } catch { /* Missing, partially written or malformed. */ }
 }
 
@@ -37,11 +37,12 @@ export async function discoverConnections(directory, { signal } = {}) {
       });
       if (!response.ok) return;
       const state = await response.json();
+      if (endpoint.instanceId && state.instanceId !== endpoint.instanceId) return;
       if (state.pid !== endpoint.pid || typeof state.sessionId !== 'string' || !state.sessionId) return;
       return {
-        pid: state.pid, sessionId: state.sessionId, cwd: text(state.cwd, 4096), url: `${endpoint.origin}/#${endpoint.token}`,
+        pid: state.pid, handle: text(state.handle, 80), instanceId: text(state.instanceId, 80), protocolVersion: state.protocolVersion, managed: state.managed === true, terminal: state.terminal, sessionId: state.sessionId, cwd: text(state.cwd, 4096), url: `${endpoint.origin}/#${endpoint.token}`,
         title: text(state.title) || text(state.sessionName), model: text(state.model), preview: text(state.preview),
-        busy: Boolean(state.busy), pending: Boolean(state.pending), spawned: Boolean(state.spawned), spawnId: text(state.spawnId, 80),
+        busy: Boolean(state.busy), pending: Boolean(state.pending),
       };
     } catch {
       // A cancelled scan is incomplete: never return a partial list that might

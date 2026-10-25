@@ -1,5 +1,15 @@
 # Changelog
 
+## 3.0.0
+
+- Independent Termux host owns the app connection, session registry, and lifecycle. Every managed session, including the first, can close without interrupting other workers.
+- Closing the last session leaves a connected empty screen; restarting the host reattaches surviving workers and preserves intentional closures.
+- Stable session handles, process-instance checks, atomic lifecycle records, serialized capacity reservations, and idempotent launch/restore requests.
+- Versioned notification targets and native UI preference migration for the new host origin. Upgrade APK and backend together; restart legacy workers explicitly.
+- Send-button-only submission: Android Return inserts a newline, keyboard shortcuts do not submit, and speech transcripts remain in the draft for review. Legacy auto-send preferences are ignored.
+- Review fixes cover invalid Restore requests, stale recovery metadata after conversation changes, storage failures, cancelled forwarding, uncertain tmux probes, and notification taps during startup.
+- Regression coverage includes separate worker processes and real Pi/tmux operation continuity after closing the first session.
+
 ## 2.2.0 — Pi Voice app 2.2.0 (versionCode 7)
 
 - **Renamed:** the Android app is now just **Pi Voice** (package `com.pivoice.app` is unchanged, so it updates in place). The APK file is now `pi-voice.apk`, and the app's version now follows the project version.

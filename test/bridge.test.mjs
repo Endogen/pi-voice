@@ -5,6 +5,7 @@ import { readFile } from 'node:fs/promises';
 import { imageLimits } from '../image-attachments.mjs';
 const png = { mimeType: 'image/png', data: (await readFile(new URL('../public/icon-192.png', import.meta.url))).toString('base64') };
 import { createVoiceBridge } from '../bridge.mjs';
+import { createApiServer } from '../transport.mjs';
 
 const token = 'a'.repeat(64);
 async function setup(t, options = {}) {
@@ -46,8 +47,16 @@ const externalNavigation = {
   'Sec-Fetch-Dest': 'document', 'Sec-Fetch-User': '?1',
 };
 
+
+async function shellSetup(t) {
+  const bridge = await createApiServer({ token, port: 0, serveAssets: true, handle: ({ send }) => send(200, { sessionId: 'session-1' }) });
+  t.after(() => bridge.close());
+  const request = (path, body, headers = {}) => fetch(bridge.origin + path, { headers: { Authorization: `Bearer ${token}`, ...headers } });
+  return { bridge, request };
+}
+
 test('serves the app shell, scripts and icons with no external dependencies', async (t) => {
-  const { bridge } = await setup(t);
+  const { bridge } = await shellSetup(t);
   for (const path of ['/', '/app.js', '/style.css', '/icon.svg', '/icon-192.png']) {
     const response = await fetch(bridge.origin + path);
     assert.equal(response.status, 200, path);
@@ -61,7 +70,7 @@ test('serves the app shell, scripts and icons with no external dependencies', as
 });
 
 test('the WebView can open the public app page even when the load is marked cross-site', async (t) => {
-  const { bridge, request } = await setup(t);
+  const { bridge, request } = await shellSetup(t);
   for (const origin of [undefined, 'android-app://com.termux', 'https://external.example']) {
     const headers = { ...externalNavigation, ...(origin ? { Origin: origin } : {}) };
     const response = await browserRequest(bridge.origin, '/', headers);
@@ -355,63 +364,12 @@ test('missing or rejected Android wake-lock support returns an actionable error'
   assert.match((await response.json()).error, /Android denied/);
 });
 
-test('relays API requests to another local Pi by PID and refuses unknown or malformed targets', async (t) => {
-  const peerPrompts = [];
-  let closed = 0;
-  const peer = await createVoiceBridge({
-    token, port: 0, pid: 222,
-    getState: () => ({ pid: 222, sessionId: 'session-2', busy: true, messages: [{ role: 'user', text: 'Peer question' }], imageAttachments: imageLimits, modelSupportsImages: true }),
-    onPrompt: (text) => { peerPrompts.push(text); return { ok: true, queued: true }; },
-    onAbort() {}, onClose: () => { closed++; return { ok: true }; },
-  });
-  t.after(() => peer.close());
-  const { request, prompts } = await setup(t, {
-    pid: 111,
-    peerOrigin: async (pid) => pid === 222 ? peer.origin : undefined,
-    listSessions: async () => [{ pid: 111 }, { pid: 222 }],
-  });
-  const state = await (await request('/api/state', undefined, { 'X-Pi-Voice-Pid': '222' })).json();
-  assert.equal(state.sessionId, 'session-2');
-  assert.equal((await (await request('/api/state', undefined, { 'X-Pi-Voice-Pid': '111' })).json()).sessionId, 'session-1', 'Its own PID is served locally');
-  const sent = await request('/api/prompt', prompt({ sessionId: 'session-2' }), { 'X-Pi-Voice-Pid': '222' });
-  assert.equal(sent.status, 200);
-  assert.deepEqual(await sent.json(), { ok: true, queued: true });
-  assert.deepEqual([peerPrompts, prompts], [['Hello from speech'], []]);
-  assert.equal((await request('/api/state', undefined, { 'X-Pi-Voice-Pid': '333' })).status, 410);
-  assert.equal((await request('/api/state', undefined, { 'X-Pi-Voice-Pid': '../x' })).status, 400);
-  assert.deepEqual(await (await request('/api/sessions', undefined, { 'X-Pi-Voice-Pid': '222' })).json(), { self: 111, sessions: [{ pid: 111 }, { pid: 222 }], stopped: [] });
-  const summary = await (await request('/api/state?summary=1', undefined, { 'X-Pi-Voice-Pid': '222' })).json();
-  assert.equal(summary.messages, undefined, 'The switcher never downloads message history');
-  assert.equal(summary.preview, 'Peer question');
-  // Closing is only possible through another bridge, never for the page's own host.
-  assert.equal((await request('/api/session/close', { sessionId: 'session-2' }, { 'X-Pi-Voice-Pid': '222' })).status, 202);
-  assert.equal(closed, 1);
-  assert.equal((await fetch(`${peer.origin}/api/session/close`, {
-    method: 'POST', headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' }, body: JSON.stringify({ sessionId: 'session-2' }),
-  })).status, 409);
-  assert.equal(closed, 1);
-});
-
-test('relay is unauthenticated-proof and reports a vanished peer as unavailable', async (t) => {
-  const { bridge, request } = await setup(t, { pid: 111, peerOrigin: async () => 'http://127.0.0.1:1' });
-  const anonymous = await fetch(`${bridge.origin}/api/state`, { headers: { 'X-Pi-Voice-Pid': '222' } });
-  assert.equal(anonymous.status, 401);
-  const gone = await request('/api/state', undefined, { 'X-Pi-Voice-Pid': '222' });
-  assert.equal(gone.status, 410, 'Nothing listening: that Pi was killed');
-  assert.match((await gone.json()).error, /no longer running/);
-});
-
-test('a hung peer is reported as unresponsive, and a reused port never answers for another PID', async (t) => {
-  const reset = http.createServer((req) => req.socket.destroy());
-  await new Promise((resolve) => reset.listen(0, '127.0.0.1', resolve));
-  t.after(() => reset.close());
-  const hung = await setup(t, { pid: 111, peerOrigin: async () => `http://127.0.0.1:${reset.address().port}` });
-  const response = await hung.request('/api/state', undefined, { 'X-Pi-Voice-Pid': '222' });
-  assert.equal(response.status, 502);
-  assert.match((await response.json()).error, /stopped responding/);
-  // Pi 333 now listens where dead Pi 222 used to: the relayed request names 222.
-  const reused = await setup(t, { pid: 333, peerOrigin: async () => { throw new Error('must not relay again'); } });
-  const answer = await reused.request('/api/state', undefined, { 'X-Pi-Voice-Pid': '222', 'X-Pi-Voice-Via': 'hub' });
-  assert.equal(answer.status, 410);
-  assert.equal((await reused.request('/api/state', undefined, { 'X-Pi-Voice-Pid': '333', 'X-Pi-Voice-Via': 'hub' })).status, 200);
+test('worker rejects another process or instance and has no peer relay or lifecycle manager', async (t) => {
+  const { request } = await setup(t, { pid: 111, instanceId: 'worker-instance' });
+  assert.equal((await request('/api/state', undefined, { 'X-Pi-Voice-Pid': '222' })).status, 410);
+  assert.equal((await request('/api/state', undefined, { 'X-Pi-Voice-Instance': 'stale-instance' })).status, 410);
+  assert.equal((await request('/api/state', undefined, { 'X-Pi-Voice-Instance': 'worker-instance' })).status, 200);
+  for (const path of ['sessions', 'session/spawn', 'session/restore', 'session/forget']) {
+    assert.equal((await request(`/api/${path}`, path === 'sessions' ? undefined : { id: 'operation-1' })).status, 404);
+  }
 });

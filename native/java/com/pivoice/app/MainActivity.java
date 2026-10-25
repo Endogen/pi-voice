@@ -57,7 +57,7 @@ public final class MainActivity extends Activity {
     private static final String ROOT = HOME + "/pi-voice";
     private static final String RUN_PERMISSION = "com.termux.permission.RUN_COMMAND";
     private static final int COMMAND_PERMISSION = 10, MICROPHONE_PERMISSION = 11, FILE_PICKER = 12, NOTIFICATION_PERMISSION = 13;
-    static final String EXTRA_PID = "com.pivoice.app.PID", EXTRA_OPEN_KEY = "com.pivoice.app.OPEN_KEY";
+    static final String EXTRA_HANDLE = "com.pivoice.app.HANDLE", EXTRA_OPEN_KEY = "com.pivoice.app.OPEN_KEY";
     private static WeakReference<MainActivity> active = new WeakReference<>(null);
     private final Handler handler = new Handler(Looper.getMainLooper());
     private FrameLayout root;
@@ -74,7 +74,7 @@ public final class MainActivity extends Activity {
     private SpeechRecognizer recognizer;
     private String speechId, speechLanguage;
     private ReplySpeaker replySpeaker;
-    private int openPid;
+    private String openHandle;
 
     /** True while the chat is on screen; the page then handles reply alerts itself. */
     static boolean inForeground() {
@@ -101,15 +101,15 @@ public final class MainActivity extends Activity {
     }
 
     private void takeOpenRequest(Intent intent) {
-        int pid = intent == null ? 0 : intent.getIntExtra(EXTRA_PID, 0);
+        String handle = intent == null ? null : intent.getStringExtra(EXTRA_HANDLE);
         String key = intent == null ? null : intent.getStringExtra(EXTRA_OPEN_KEY);
-        openPid = pid > 0 && key != null && key.equals(Prefs.openKey(this)) ? pid : 0;
+        openHandle = handle != null && handle.matches("[a-zA-Z0-9-]{8,80}") && key != null && key.equals(Prefs.openKey(this)) ? handle : null;
     }
 
     private void openRequestedSession() {
-        if (openPid <= 0 || !trustedPage()) return;
-        int pid = openPid; openPid = 0;
-        web.evaluateJavascript("window.__piVoiceOpenSession && window.__piVoiceOpenSession(" + pid + ")", null);
+        if (openHandle == null || !trustedPage()) return;
+        String handle = openHandle; openHandle = null;
+        web.evaluateJavascript("window.__piVoiceOpenSession && window.__piVoiceOpenSession(" + JSONObject.quote(handle) + ")", null);
     }
 
     private int dp(int value) { return Math.round(value * getResources().getDisplayMetrics().density); }
@@ -220,7 +220,7 @@ public final class MainActivity extends Activity {
         if (Build.VERSION.SDK_INT >= 31) flags |= PendingIntent.FLAG_MUTABLE;
         connectionResult = PendingIntent.getBroadcast(this, 0, receiver, flags);
         try {
-            // The first task holds a managed PTY alive; the short second task
+            // The first task runs the independent host; the short second task
             // returns the connection. Neither asks Termux to open its Activity.
             startService(command(PREFIX + "/bin/bash", new String[]{ROOT + "/native/host.sh"}, null));
             ComponentName started = startService(command(PREFIX + "/bin/node", new String[]{ROOT + "/native/bootstrap.mjs"}, connectionResult));
@@ -268,16 +268,52 @@ public final class MainActivity extends Activity {
             // Lets signed reply broadcasts be verified while the app is closed.
             Prefs.get(activity).edit().putString(Prefs.TOKEN, parsed.getRawFragment()).apply();
             if (url.equals(activity.connectionUrl) && activity.pageReady) { activity.panel.setVisibility(View.GONE); activity.openRequestedSession(); return; }
-            activity.origin = origin; activity.connectionUrl = url; activity.pageReady = false; activity.loadFailed = false;
-            activity.loading("Opening your local chat…");
-            activity.web.loadUrl(url);
-            activity.handler.postDelayed(() -> {
-                if (!activity.destroyed && url.equals(activity.connectionUrl) && !activity.pageReady && !activity.loadFailed) {
-                    activity.loadFailed = true; activity.web.stopLoading();
-                    activity.showError("The local chat took too long to load. Tap Try again.");
-                }
-            }, 20000);
+            activity.openConnection(url, origin);
         } catch (Exception error) { activity.showError("Termux returned an invalid connection. No page was opened. Tap Try again."); }
+    }
+
+    // Capture only known UI settings before an origin transition. Never copy
+    // credentials or arbitrary storage. Keep an unsent draft/attachments on
+    // their current page instead of silently discarding them during upgrade.
+    private void openConnection(String url, String nextOrigin) {
+        if (trustedPage() && !nextOrigin.equals(origin)) {
+            String capture = "JSON.stringify({values:Object.fromEntries(" + new org.json.JSONArray(java.util.Arrays.asList(Prefs.UI_KEYS)).toString()
+                + ".map(k=>[k,localStorage.getItem('pi-voice-'+k)])),draft:!!document.getElementById('draft')?.value,images:!document.getElementById('attachments')?.hidden})";
+            web.evaluateJavascript(capture, encoded -> {
+                try {
+                    String raw = new org.json.JSONTokener(encoded).nextValue().toString();
+                    JSONObject saved = new JSONObject(raw);
+                    JSONObject values = saved.getJSONObject("values");
+                    android.content.SharedPreferences.Editor editor = Prefs.get(this).edit();
+                    for (String key : Prefs.UI_KEYS) {
+                        if (!values.isNull(key)) {
+                            String value = values.getString(key);
+                            if (value.length() <= 128) editor.putString("ui." + key, value);
+                        }
+                    }
+                    editor.apply();
+                    if (saved.optBoolean("draft") || saved.optBoolean("images")) {
+                        panel.setVisibility(View.GONE);
+                        new AlertDialog.Builder(this).setTitle("Keep your draft")
+                            .setMessage("Copy or finish your draft and attachments on this page, then tap Reconnect to finish updating Pi Voice.")
+                            .setPositiveButton("OK", null).show();
+                        return;
+                    }
+                    loadConnection(url, nextOrigin);
+                } catch (Exception error) { showError("Could not preserve page settings. Finish any draft before reopening Pi Voice."); }
+            });
+        } else loadConnection(url, nextOrigin);
+    }
+
+    private void loadConnection(String url, String nextOrigin) {
+        if (destroyed) return;
+        origin = nextOrigin; connectionUrl = url; pageReady = false; loadFailed = false;
+        loading("Opening your local chat…"); web.loadUrl(url);
+        handler.postDelayed(() -> {
+            if (!destroyed && url.equals(connectionUrl) && !pageReady && !loadFailed) {
+                loadFailed = true; web.stopLoading(); showError("The local chat took too long to load. Tap Try again.");
+            }
+        }, 20000);
     }
 
     private boolean trusted(Uri url) {
@@ -311,6 +347,7 @@ public final class MainActivity extends Activity {
         @Override public void onPageFinished(WebView view, String url) {
             if (!destroyed && !loadFailed && trusted(Uri.parse(url)) && "/".equals(Uri.parse(url).getPath())) {
                 pageReady = true; panel.setVisibility(View.GONE);
+                web.evaluateJavascript("window.__piVoiceRestorePreferences && window.__piVoiceRestorePreferences(" + Prefs.uiValues(MainActivity.this).toString() + ")", null);
                 openRequestedSession();
             }
         }
@@ -372,6 +409,10 @@ public final class MainActivity extends Activity {
     // fixed actions: restart Pi through the normal connection routine, and show
     // Pi's terminal.
     public final class SpeechBridge {
+        @JavascriptInterface public void setUiPreference(String key, String value) {
+            if (!Prefs.uiKey(key) || value == null || value.length() > 128) return;
+            handler.post(() -> { if (trustedPage()) Prefs.get(MainActivity.this).edit().putString("ui." + key, value).apply(); });
+        }
         @JavascriptInterface public void speakText(String id, String text, String language) {
             if (id == null || !id.matches("[a-fA-F0-9-]{36}")) return;
             handler.post(() -> {

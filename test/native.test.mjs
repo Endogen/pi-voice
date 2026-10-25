@@ -4,8 +4,8 @@ import http from 'node:http';
 import { mkdtemp, mkdir, readFile, writeFile, rm, access } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
-import { chooseConnection, discoverConnections, waitForConnection } from '../native/connection.mjs';
-import { runNativeHost } from '../native/host.mjs';
+import { discoverHost, waitForConnection } from '../native/connection.mjs';
+import { discoverConnections } from '../discovery.mjs';
 import { enableExternalApps } from '../native/setup.mjs';
 
 async function fixture(t, handler) {
@@ -35,8 +35,7 @@ test('native discovery authenticates, checks PID and reconstructs URL instead of
   const connections = await discoverConnections(h.directory);
   assert.equal(connections.length, 1);
   assert.equal(connections[0].url, `${h.origin}/#${h.token}`);
-  assert.equal(chooseConnection(connections).sessionId, 'native-session');
-  assert.equal((await waitForConnection({ directory: h.directory, timeout: 50 })).pid, 4567);
+  assert.equal(await discoverHost(h.directory), undefined, 'A worker is never the app host');
 });
 
 test('discovery limits concurrent probes so stale records cannot exhaust the bridge connection cap', async (t) => {
@@ -75,38 +74,21 @@ test('native discovery ignores stale state PID and never follows redirects with 
   assert.equal(mismatch.calls(), 1, 'The redirect destination was never fetched');
 });
 
-test('native startup refuses ambiguity instead of choosing or starting another Pi', async (t) => {
-  assert.equal(chooseConnection([]), undefined);
-  assert.throws(() => chooseConnection([{ pid: 1 }, { pid: 2 }]), /Several Pi sessions/);
-  // App-started parallel sessions are reached through the in-app switcher.
-  assert.equal(chooseConnection([{ pid: 3, spawned: true }, { pid: 1 }]).pid, 1);
-  assert.equal(chooseConnection([{ pid: 3, spawned: true }, { pid: 4, spawned: true }]).pid, 3);
-  const h = await fixture(t);
-  const reused = await runNativeHost({ directory: h.directory, pi: '/never-execute-this' });
-  assert.deepEqual(reused, { reused: true });
-});
-
-test('native wait is bounded and does not create any Pi process itself', async (t) => {
-  const directory = await mkdtemp(join(tmpdir(), 'pi-voice-native-empty-'));
-  t.after(() => rm(directory, { recursive: true, force: true }));
-  await assert.rejects(waitForConnection({ directory, timeout: 25, interval: 5 }), /Pi did not become ready/);
-});
-
-test('native wait deadline includes stalled discovery probes and long polling intervals', async (t) => {
-  const h = await fixture(t, () => {});
-  for (let i = 0; i < 12; i++) {
-    const pid = 5000 + i;
-    await writeFile(join(h.directory, 'endpoints', `${pid}.json`), JSON.stringify({ ...h.endpoint, pid }));
+test('native bootstrap only accepts an authenticated, identity-matched host endpoint', async (t) => {
+  const h = await fixture(t, (_req, res) => {
+    res.setHeader('Content-Type', 'application/json');
+    res.end(JSON.stringify({ role: 'host', protocolVersion: 1, pid: 4567, instanceId: 'host-instance' }));
+  });
+  const file = join(h.directory, 'host-endpoint.json');
+  const endpoint = { role: 'host', protocolVersion: 1, pid: 4567, instanceId: 'host-instance', origin: h.origin };
+  await writeFile(join(h.directory, 'token'), h.token);
+  await writeFile(file, JSON.stringify(endpoint));
+  assert.equal((await waitForConnection({ directory: h.directory, timeout: 1000 })).url, `${h.origin}/#${h.token}`);
+  for (const changes of [{ instanceId: 'wrong-instance' }, { protocolVersion: 99 }, { role: 'worker' }, { origin: 'https://evil.example' }]) {
+    await writeFile(file, JSON.stringify({ ...endpoint, ...changes }));
+    assert.equal(await discoverHost(h.directory), undefined);
   }
-  const start = performance.now();
-  await assert.rejects(waitForConnection({ directory: h.directory, timeout: 80, interval: 1000 }), /Pi did not become ready/);
-  assert.ok(performance.now() - start < 800, 'The overall deadline must abort in-flight probes');
-  assert.ok(h.calls() <= 4, 'Expired discovery must not probe the remaining records');
-
-  await rm(join(h.directory, 'endpoints'), { recursive: true });
-  const emptyStart = performance.now();
-  await assert.rejects(waitForConnection({ directory: h.directory, timeout: 40, interval: 1000 }), /Pi did not become ready/);
-  assert.ok(performance.now() - emptyStart < 800, 'The polling delay must respect the deadline');
+  await assert.rejects(waitForConnection({ directory: h.directory, timeout: 30, interval: 1000 }), /host did not become ready/);
 });
 
 test('native setup is explicit and preserves unrelated Termux properties and comments', () => {
@@ -123,13 +105,13 @@ test('native Android contract has fixed commands, non-exported result receiver a
   const manifest = await readFile(new URL('../native/AndroidManifest.xml', import.meta.url), 'utf8');
   const script = await readFile(new URL('../native/host.sh', import.meta.url), 'utf8');
   const methods = [...source.matchAll(/@JavascriptInterface public \w+ (\w+)/g)].map((match) => match[1]);
-  assert.deepEqual(methods, ['speakText', 'stopReading', 'startSpeech', 'stopSpeech', 'abortSpeech', 'haptic', 'setReplyAlerts', 'replyAlertStatus', 'reconnect', 'openTerminal']);
+  assert.deepEqual(methods, ['setUiPreference', 'speakText', 'stopReading', 'startSpeech', 'stopSpeech', 'abortSpeech', 'haptic', 'setReplyAlerts', 'replyAlertStatus', 'reconnect', 'openTerminal']);
   const receiver = await readFile(new URL('../native/java/com/pivoice/app/ReplyReceiver.java', import.meta.url), 'utf8');
   // Reply alerts: HMAC-verified before anything else, then only in the background.
   assert.match(receiver, /if \(!ReplyAlerts\.verify\(prefs\.getString\(Prefs\.TOKEN, null\)[^\n]+\) return;\s+\/\/[^\n]+\s+if \(MainActivity\.inForeground\(\)/);
   assert.match(receiver, /PendingIntent\.FLAG_IMMUTABLE/);
-  assert.match(source, /openPid = pid > 0 && key != null && key\.equals\(Prefs\.openKey\(this\)\) \? pid : 0;/, 'Only our own notifications may pick a session');
-  assert.match(source, /web\.evaluateJavascript\("window\.__piVoiceOpenSession && window\.__piVoiceOpenSession\(" \+ pid \+ "\)"/, 'The session is passed as an int, never as script text');
+  assert.match(source, /JSONObject.quote\(handle\)/, 'Notification handles are quoted, never interpreted as script');
+  assert.match(source, /key.equals\(Prefs.openKey\(this\)\)/);
   assert.equal([...manifest.matchAll(/android:exported="true"/g)].length, 2, 'Only the launcher Activity and the signed reply receiver are exported');
   assert.match(manifest, /<receiver android:name=".ReplyReceiver" android:exported="true" \/>/);
   assert.match(source, /public void reconnect\(\) \{[\s\S]*?if \(!trustedPage\(\) \|\| !resumed \|\| nonce != null\) return;\s+connect\(\);/, 'Reconnect takes no input and never overlaps an attempt');

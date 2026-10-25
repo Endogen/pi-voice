@@ -24,7 +24,7 @@ class Element {
   click() { this.clicked = (this.clicked || 0) + 1; return this.listeners.click?.(); }
   scrollIntoView() { throw new Error('Conversation updates must not force-scroll.'); }
 }
-async function setup({ auto = false, speech = true, awake = true, confirmed = true, native = false, playback = false, nativePlayback = true, nativeTerminal = true, nativeReconnect = true, nativeAlerts = true, alertStatus = 'on' } = {}) {
+async function setup({ auto = false, speech = true, awake = true, confirmed = true, native = false, playback = false, nativePlayback = true, nativeTerminal = true, nativeReconnect = true, nativeAlerts = true, alertStatus = 'on', initialState } = {}) {
   const elements = new Map();
   const prompts = [];
   const instances = [];
@@ -50,7 +50,7 @@ async function setup({ auto = false, speech = true, awake = true, confirmed = tr
   class Utterance { constructor(text) { this.text = text; } }
   const synthesis = { cancellations: 0, speak: (utterance) => utterances.push(utterance), cancel() { this.cancellations++; } };
   const values = new Map([['pi-voice-autosend', String(auto)], ['pi-voice-awake', String(awake)]]);
-  const state = { pid: 100, sessionId: 'session-one', sessionName: 'Test', cwd: '/project', model: 'test/test', busy: false, messages: [], imageAttachments: true, modelSupportsImages: true };
+  const state = { handle: 'session-100', instanceId: 'instance-100', status: 'ready', capabilities: { close: true }, sessionId: 'session-one', sessionName: 'Test', cwd: '/project', model: 'test/test', busy: false, messages: [], imageAttachments: true, modelSupportsImages: true };
   const imageProcessing = {
     calls: [], encoded: [], closed: 0,
     async decode(file) { return { width: file.width || 4000, height: file.height || 3000, close() { imageProcessing.closed++; } }; },
@@ -67,10 +67,10 @@ async function setup({ auto = false, speech = true, awake = true, confirmed = tr
   const requests = [];
   const confirmations = [];
   const stopped = [];
-  const sessions = [{ pid: 100, sessionId: 'session-one', title: 'Test', cwd: '/project', busy: false, spawned: false }];
+  const sessions = [{ handle: 'session-100', instanceId: 'instance-100', status: 'ready', capabilities: { close: true }, sessionId: 'session-one', title: 'Test', cwd: '/project', busy: false, spawned: false }];
   const network = {
-    state: () => Response.json(state),
-    sessions: () => Response.json({ self: 100, sessions, stopped }),
+    state: initialState || (() => Response.json(state)),
+    sessions: () => Response.json({ selected: state.handle, sessions, stopped }),
     activity: () => Response.json({ version: 1, steps: [], terminal: {} }),
     spawn: () => Response.json({ ok: true }, { status: 202 }),
     close: () => Response.json({ ok: true }, { status: 202 }),
@@ -117,13 +117,14 @@ async function setup({ auto = false, speech = true, awake = true, confirmed = tr
     confirm: (message) => { confirmations.push(message); return confirmed; },
     async fetch(path, options) {
       const body = options.body ? JSON.parse(options.body) : undefined;
-      const pid = options.headers['X-Pi-Voice-Pid'];
-      requests.push({ path, body, pid });
-      if (path === '/api/state') return network.state(pid);
+      const handle = options.headers['X-Pi-Voice-Session'];
+      requests.push({ path, body, handle });
+      if (path === '/api/state') return network.state(handle);
       if (path === '/api/sessions') return network.sessions();
-      if (path === '/api/activity') return network.activity(pid);
+      if (path === '/api/activity') return network.activity(handle);
+      if (path === '/api/session/select') return Response.json({ ok: true });
       if (path === '/api/session/spawn') return network.spawn(body);
-      if (path === '/api/session/close') return network.close(body, pid);
+      if (path === '/api/session/close') return network.close(body, handle);
       if (path === '/api/session/restore') return Response.json({ ok: true, id: body.id }, { status: 202 });
       if (path === '/api/session/forget') return Response.json({ ok: true });
       if (path === '/api/prompt') { prompts.push(body); return network.prompt(body); }
@@ -143,6 +144,25 @@ function result(text, final = true) {
   return { results: [Object.assign([{ transcript: text }], { isFinal: final })] };
 }
 
+test('Enter and modified Enter leave textarea editing native; only the Send button submits', async () => {
+  const h = await setup({ auto: true });
+  h.el('draft').value = 'first line';
+  for (const modifiers of [{}, { ctrlKey: true }, { metaKey: true }, { shiftKey: true }, { isComposing: true }]) {
+    let prevented = false;
+    h.el('draft').listeners.keydown?.({ key: 'Enter', ...modifiers, preventDefault() { prevented = true; } });
+    await flush();
+    assert.equal(prevented, false);
+    assert.equal(h.prompts.length, 0);
+  }
+  const html = await readFile(new URL('../public/index.html', import.meta.url), 'utf8');
+  assert.match(html, /<textarea\b[^>]*enterkeyhint="enter"/);
+  h.el('draft').value += '\nsecond line';
+  h.el('draft').listeners.input();
+  h.el('send').click(); await flush();
+  assert.equal(h.prompts.length, 1);
+  assert.equal(h.prompts[0].text, 'first line\nsecond line');
+});
+
 test('completed speech ignores duplicate completion and late callbacks during a later recording', async () => {
   const h = await setup({ auto: true });
   h.el('microphone').click();
@@ -150,7 +170,8 @@ test('completed speech ignores duplicate completion and late callbacks during a 
   first.onresult(result('First question'));
   first.onend();
   await flush();
-  assert.equal(h.prompts.length, 1);
+  assert.equal(h.prompts.length, 0);
+  h.el('send').click(); await flush();
   first.onend();
   await flush();
   assert.equal(h.prompts.length, 1, 'A duplicate end must not send the transcript again');
@@ -167,6 +188,8 @@ test('completed speech ignores duplicate completion and late callbacks during a 
   second.onresult(result('Second question'));
   second.onend();
   await flush();
+  assert.equal(h.prompts.length, 1);
+  h.el('send').click(); await flush();
   assert.deepEqual(h.prompts.map((prompt) => prompt.text), ['First question', 'Second question']);
 });
 
@@ -492,15 +515,14 @@ test('New always spawns once, keeps the original listed and preserves the unsent
   assert.equal(h.el('new-session').disabled, true);
   assert.equal(h.el('send').disabled, true);
   assert.equal(h.el('microphone').disabled, true);
-  h.sessions.push({ pid: 200, sessionId: 'session-two', title: 'New session', spawnId: body.id, spawned: true });
-  h.network.state = (pid) => Response.json(pid === '200' ? { ...h.state, pid: 200, sessionId: 'session-two', messages: [] } : h.state);
+  h.sessions.push({ handle: 'session-200', instanceId: 'instance-200', status: 'ready', capabilities: { close: true }, sessionId: 'session-two', title: 'New session', operationId: body.id, spawned: true });
+  h.network.state = (handle) => Response.json(handle === 'session-200' ? { ...h.state, handle: 'session-200', instanceId: 'instance-200', status: 'ready', capabilities: { close: true }, sessionId: 'session-two', messages: [] } : h.state);
   await vm.runInContext('pollSessions()', h.context);
   await flush();
   assert.equal(h.el('draft').value, 'unsent words');
   assert.equal(h.el('draft').readOnly, false);
   assert.equal(h.el('attachments').hidden, false);
   assert.equal(h.el('new-session').disabled, false);
-  assert.equal(h.el('autosend').checked, true);
   assert.equal(h.el('question-card').hidden, true);
   assert.equal(h.el('latest-answer').textContent, 'Tap the microphone or type a question below.');
   assert.deepEqual(h.el('messages').children, []);
@@ -562,24 +584,23 @@ for (const working of ['busy', 'pending']) test(`New while Pi is ${working} star
   assert.ok(spawn, 'The busy session is not replaced');
   assert.equal(h.requests.some((r) => r.path === '/api/session/new'), false);
   assert.equal(h.el('new-session').disabled, true, 'A second New waits for the first parallel session');
-  h.sessions.push({ pid: 200, sessionId: 'session-two', title: 'New session', cwd: '/project', busy: false, spawned: true, spawnId: spawn.body.id });
-  h.network.state = (pid) => Response.json(pid === '200' ? { ...h.state, pid: 200, sessionId: 'session-two', busy: false, title: 'New session' } : h.state);
+  h.sessions.push({ handle: 'session-200', instanceId: 'instance-200', status: 'ready', capabilities: { close: true }, sessionId: 'session-two', title: 'New session', cwd: '/project', busy: false, spawned: true, operationId: spawn.body.id });
+  h.network.state = (handle) => Response.json(handle === 'session-200' ? { ...h.state, handle: 'session-200', instanceId: 'instance-200', status: 'ready', capabilities: { close: true }, sessionId: 'session-two', busy: false, title: 'New session' } : h.state);
   await vm.runInContext('pollSessions()', h.context);
   await flush();
-  assert.equal(h.requests.at(-1).pid, '200', 'Later requests go to the new Pi through this bridge');
+  assert.equal(h.requests.at(-1).handle, 'session-200', 'Later requests go to the new Pi through the independent host');
   assert.equal(h.el('session-title').textContent, 'New session');
   assert.match(h.el('notice').textContent, /previous one keeps running/);
-  assert.equal(h.el('autosend').checked, true, 'A switch the user asked for does not reset auto-send');
-  assert.equal(h.values.get('pi-voice-session-pid'), '200');
+  assert.equal(vm.runInContext('targetHandle', h.context), 'session-200');
   h.el('draft').value = 'question for the new session';
   await vm.runInContext('send()', h.context);
   assert.equal(h.prompts.at(-1).sessionId, 'session-two');
-  assert.equal(h.requests.find((r) => r.path === '/api/prompt').pid, '200');
+  assert.equal(h.requests.find((r) => r.path === '/api/prompt').handle, 'session-200');
   h.el('open-sessions').click();
   assert.equal(h.el('session-list').children.length, 2);
   h.el('session-list').children[0].children[0].click();
   await flush();
-  assert.equal(h.values.get('pi-voice-session-pid'), '');
+  assert.equal(vm.runInContext('targetHandle', h.context), 'session-100');
   assert.equal(h.state[working], true, 'The first task is still running, with no reply needed to switch');
   assert.equal(h.el('thinking').hidden, false);
   assert.equal(h.el('new-session').disabled, false);
@@ -587,12 +608,12 @@ for (const working of ['busy', 'pending']) test(`New while Pi is ${working} star
   assert.equal(h.el('session-list').children.length, 2, 'Both sessions remain in the list');
   h.el('session-list').children[1].children[0].click();
   await flush();
-  assert.equal(h.values.get('pi-voice-session-pid'), '200');
+  assert.equal(vm.runInContext('targetHandle', h.context), 'session-200');
 });
 
 test('a background session that finishes is flagged, and switching back clears the flag', async () => {
   const h = await setup();
-  h.sessions.push({ pid: 200, sessionId: 'session-two', title: 'Background', cwd: '/project', busy: true, spawned: true });
+  h.sessions.push({ handle: 'session-200', instanceId: 'instance-200', status: 'ready', capabilities: { close: true }, sessionId: 'session-two', title: 'Background', cwd: '/project', busy: true, spawned: true });
   await vm.runInContext('pollSessions()', h.context);
   assert.equal(h.el('sessions-badge').hidden, false);
   assert.equal(h.el('sessions-badge').textContent, '2');
@@ -602,9 +623,9 @@ test('a background session that finishes is flagged, and switching back clears t
   h.el('open-sessions').click();
   const rows = h.el('session-list').children;
   assert.equal(rows.length, 2);
-  assert.equal(rows[0].children.length, 1, 'The session hosting this page cannot be closed from it');
+  assert.equal(rows[0].children.length, 2, 'The first session has the same Close action as later sessions');
   assert.equal(rows[1].children.length, 2, 'App-started sessions can be closed');
-  h.network.state = (pid) => Response.json(pid === '200' ? { ...h.state, pid: 200, sessionId: 'session-two' } : h.state);
+  h.network.state = (handle) => Response.json(handle === 'session-200' ? { ...h.state, handle: 'session-200', instanceId: 'instance-200', status: 'ready', capabilities: { close: true }, sessionId: 'session-two' } : h.state);
   rows[1].children[0].listeners.click();
   await flush();
   assert.equal(h.el('sessions-dialog').open, false);
@@ -612,21 +633,22 @@ test('a background session that finishes is flagged, and switching back clears t
   assert.doesNotMatch(h.el('notice').textContent || '', /Pi switched sessions/);
 });
 
-test('closing a parallel session targets that Pi and a vanished session falls back to the main one', async () => {
+test('closing a parallel session targets that Pi and a vanished session reloads host selection', async () => {
   const h = await setup();
-  h.sessions.push({ pid: 200, sessionId: 'session-two', title: 'Background', cwd: '/project', busy: true, spawned: true });
+  h.sessions.push({ handle: 'session-200', instanceId: 'instance-200', status: 'ready', capabilities: { close: true }, sessionId: 'session-two', title: 'Background', cwd: '/project', busy: true, spawned: true });
   await vm.runInContext('pollSessions()', h.context);
   h.el('open-sessions').click();
   await h.el('session-list').children[1].children[1].listeners.click();
   assert.match(h.confirmations.at(-1), /still working/);
   const close = h.requests.find((r) => r.path === '/api/session/close');
-  assert.deepEqual([close.pid, close.body.sessionId], ['200', 'session-two']);
+  assert.deepEqual([close.handle, close.body.sessionId], ['session-200', 'session-two']);
 
-  h.network.state = (pid) => pid === '300' ? Response.json({ error: 'That session is no longer running.' }, { status: 410 }) : Response.json(h.state);
-  await vm.runInContext('selectTarget(300); poll()', h.context);
   await flush();
-  assert.match(h.el('notice').textContent, /has ended/);
-  assert.equal(h.requests.at(-1).pid, undefined);
+  h.network.state = (handle) => handle === 'session-300' ? Response.json({ error: 'That session is no longer running.' }, { status: 410 }) : Response.json(h.state);
+  await vm.runInContext('selectTarget("session-300"); poll()', h.context);
+  await flush();
+  assert.match(h.el('notice').textContent, /unavailable/);
+  assert.equal(h.requests.at(-1).handle, undefined);
   assert.equal(h.el('session-title').textContent, 'Test');
 });
 
@@ -665,13 +687,13 @@ test('New discovers the spawned Pi after a lost acknowledgement without launchin
   assert.equal(h.el('new-session').disabled, true);
   await vm.runInContext('startNewSession()', h.context);
   const { body } = h.requests.find((r) => r.path === '/api/session/spawn');
-  h.sessions.push({ pid: 200, sessionId: 'session-two', spawnId: body.id });
-  h.network.state = (pid) => Response.json(pid === '200' ? { ...h.state, pid: 200, sessionId: 'session-two' } : h.state);
+  h.sessions.push({ handle: 'session-200', instanceId: 'instance-200', status: 'ready', capabilities: { close: true }, sessionId: 'session-two', operationId: body.id });
+  h.network.state = (handle) => Response.json(handle === 'session-200' ? { ...h.state, handle: 'session-200', instanceId: 'instance-200', status: 'ready', capabilities: { close: true }, sessionId: 'session-two' } : h.state);
   await vm.runInContext('pollSessions()', h.context);
   await flush();
   assert.equal(h.el('draft').value, 'keep on success too');
   assert.equal(h.el('new-session').disabled, false);
-  assert.equal(h.values.get('pi-voice-session-pid'), '200');
+  assert.equal(vm.runInContext('targetHandle', h.context), 'session-200');
   assert.equal(h.requests.filter((r) => r.path === '/api/session/spawn').length, 1);
 });
 
@@ -716,9 +738,9 @@ test('without a reconnect-capable native shell the app explains how to restart P
   assert.match(page.el('notice').textContent, /Open the Pi Voice app/);
 });
 
-test('sessions that stopped earlier can be restored or dismissed by PID only', async () => {
+test('sessions that stopped earlier can be restored or dismissed by opaque handle only', async () => {
   const h = await setup();
-  h.stopped.push({ pid: 4321, title: 'Refactor bridge', cwd: '/project', updated: Date.now() - 2 * 3600000 });
+  h.stopped.push({ handle: 'restore-4321', restorable: true, title: 'Refactor bridge', cwd: '/project', updated: Date.now() - 2 * 3600000 });
   await vm.runInContext('pollSessions()', h.context);
   assert.equal(h.el('restore-banner').hidden, false);
   assert.equal(h.el('restore-label').textContent, '1 earlier session stopped · Restore');
@@ -728,22 +750,22 @@ test('sessions that stopped earlier can be restored or dismissed by PID only', a
   assert.match(row.children[0].children[1].children[1].textContent, /Stopped · 2 h ago · project/);
   await row.children[1].listeners.click();
   const restore = h.requests.find((r) => r.path === '/api/session/restore');
-  assert.deepEqual(Object.keys(restore.body).sort(), ['id', 'pid'], 'No paths are sent from the page');
-  assert.equal(restore.body.pid, 4321);
+  assert.deepEqual(Object.keys(restore.body).sort(), ['handle', 'id'], 'No paths are sent from the page');
+  assert.equal(restore.body.handle, 'restore-4321');
   h.stopped.length = 0;
-  h.sessions.push({ pid: 500, sessionId: 'restored', title: 'Refactor bridge', cwd: '/project', spawned: true, spawnId: restore.body.id });
-  h.network.state = (pid) => Response.json(pid === '500' ? { ...h.state, pid: 500, sessionId: 'restored' } : h.state);
+  h.sessions.push({ handle: 'session-500', instanceId: 'instance-500', status: 'ready', sessionId: 'restored', title: 'Refactor bridge', cwd: '/project', spawned: true, operationId: restore.body.id });
+  h.network.state = (handle) => Response.json(handle === 'session-500' ? { ...h.state, handle: 'session-500', instanceId: 'instance-500', status: 'ready', sessionId: 'restored' } : h.state);
   await vm.runInContext('pollSessions()', h.context);
   await flush();
-  assert.equal(h.requests.at(-1).pid, '500');
+  assert.equal(h.requests.at(-1).handle, 'session-500');
   assert.match(h.el('notice').textContent, /Session restored/);
   assert.equal(h.el('restore-banner').hidden, true);
-  h.stopped.push({ pid: 9876, title: 'Old', cwd: '/x', updated: Date.now() });
+  h.stopped.push({ handle: 'restore-9876', restorable: true, title: 'Old', cwd: '/x', updated: Date.now() });
   await vm.runInContext('pollSessions()', h.context);
   vm.runInContext('renderSessions()', h.context);
   await h.el('stopped-list').children[0].children[2].listeners.click();
   assert.equal(h.requests.at(-1).path, '/api/session/forget');
-  assert.equal(h.requests.at(-1).body.pid, 9876);
+  assert.equal(h.requests.at(-1).body.handle, 'restore-9876');
 });
 
 test('speech is user-initiated and review-before-send is the default', async () => {
@@ -764,7 +786,7 @@ test('speech is user-initiated and review-before-send is the default', async () 
   assert.equal(h.el('draft').value, '');
 });
 
-test('auto-send submits final speech exactly once, not interim results', async () => {
+test('a legacy auto-send preference cannot submit speech without the Send button', async () => {
   const h = await setup({ auto: true });
   h.el('microphone').listeners.click();
   const engine = h.instances[0];
@@ -774,6 +796,9 @@ test('auto-send submits final speech exactly once, not interim results', async (
   assert.equal(h.prompts.length, 0);
   engine.onend();
   await flush();
+  assert.equal(h.prompts.length, 0);
+  assert.equal(h.el('draft').value, 'finished words');
+  h.el('send').click(); await flush();
   assert.equal(h.prompts.length, 1);
   assert.equal(h.prompts[0].text, 'finished words');
 });
@@ -795,14 +820,13 @@ test('permission errors and no-speech never auto-send a pre-existing draft', asy
   assert.equal(h.el('draft').value, 'keep this unsent');
 });
 
-test('switching sessions during speech disables auto-send and cancels recording', async () => {
+test('switching sessions during speech cancels recording without submitting it', async () => {
   const h = await setup({ auto: true });
   h.el('microphone').listeners.click();
   h.instances[0].onresult(result('do not send into the wrong session'));
   h.state.sessionId = 'session-two';
   await vm.runInContext('poll()', h.context);
   await flush();
-  assert.equal(h.el('autosend').checked, false);
   assert.equal(h.prompts.length, 0);
 });
 
@@ -1059,6 +1083,8 @@ test('native speech uses Android rather than Web Speech, supports partial/final 
   callback(call.id, 'end', '');
   callback(call.id, 'end', '');
   await flush();
+  assert.equal(h.prompts.length, 0);
+  h.el('send').click(); await flush();
   assert.equal(h.prompts.length, 1);
   assert.equal(h.prompts[0].text, 'Final "text" <not code>');
 });
@@ -1211,18 +1237,18 @@ test('switching sessions retargets Open in Termux and ignores late activity from
   h.network.activity = () => new Promise((resolve) => { finishActivity = resolve; });
   const previousActivity = vm.runInContext('pollActivity()', h.context);
   let finishState;
-  h.network.state = (pid) => pid === '200' ? new Promise((resolve) => { finishState = resolve; }) : Response.json(h.state);
-  vm.runInContext('switchTo(200)', h.context);
+  h.network.state = (handle) => handle === 'session-200' ? new Promise((resolve) => { finishState = resolve; }) : Response.json(h.state);
+  vm.runInContext("switchTo('session-200')", h.context);
   assert.equal(h.el('open-terminal').disabled, true, 'Cannot attach the old terminal during a switch');
   h.el('open-terminal').click();
   assert.equal(h.nativeCalls.some((call) => call.method === 'terminal'), false);
-  finishState(Response.json({ ...h.state, pid: 200, sessionId: 'session-two', terminal: { session: 'pi-voice-abcdef12' } }));
+  finishState(Response.json({ ...h.state, handle: 'session-200', instanceId: 'instance-200', status: 'ready', capabilities: { close: true }, sessionId: 'session-two', terminal: { session: 'pi-voice-abcdef12' } }));
   await flush();
   finishActivity(Response.json({ terminal: { session: 'pi-voice' }, steps: [] }));
   await previousActivity;
   h.el('open-terminal').click();
   assert.equal(h.nativeCalls.at(-1).session, 'pi-voice-abcdef12');
-  vm.runInContext('switchTo(100)', h.context);
+  vm.runInContext("switchTo('session-100')", h.context);
   await flush();
   h.el('open-terminal').click();
   assert.equal(h.nativeCalls.at(-1).session, 'pi-voice');
@@ -1236,8 +1262,8 @@ test('late failed state/activity polls cannot disconnect the newly selected sess
   h.network.activity = () => new Promise((resolve) => { failActivity = resolve; });
   const previousState = vm.runInContext('poll()', h.context);
   const previousActivity = vm.runInContext('pollActivity()', h.context);
-  h.network.state = () => Response.json({ ...h.state, pid: 200, sessionId: 'session-two', terminal: { session: 'pi-voice-abcdef12' } });
-  vm.runInContext('switchTo(200)', h.context);
+  h.network.state = () => Response.json({ ...h.state, handle: 'session-200', instanceId: 'instance-200', status: 'ready', capabilities: { close: true }, sessionId: 'session-two', terminal: { session: 'pi-voice-abcdef12' } });
+  vm.runInContext("switchTo('session-200')", h.context);
   failState(new TypeError('Old session connection closed'));
   failActivity(Response.json({ error: 'Not found' }, { status: 404 }));
   await Promise.all([previousState, previousActivity]);
@@ -1318,12 +1344,12 @@ test('a new reply chimes and vibrates once; switching sessions or loading histor
   assert.deepEqual(haptics(), ['confirm']);
   await vm.runInContext('poll()', h.context);
   assert.equal(h.tones.length, 2, 'An unchanged reply is not announced again');
-  h.network.state = (pid) => Response.json(pid === '200' ? { ...h.state, pid: 200, sessionId: 'two', messages: [{ id: 'b1', role: 'assistant', text: 'Other' }] } : h.state);
-  await vm.runInContext('selectTarget(200); poll()', h.context);
+  h.network.state = (handle) => Response.json(handle === 'session-200' ? { ...h.state, handle: 'session-200', instanceId: 'instance-200', status: 'ready', capabilities: { close: true }, sessionId: 'two', messages: [{ id: 'b1', role: 'assistant', text: 'Other' }] } : h.state);
+  await vm.runInContext('selectTarget("session-200"); poll()', h.context);
   assert.equal(h.tones.length, 2, 'A switch shows an existing reply silently');
   h.el('sound').checked = false;
   h.el('haptics').checked = false;
-  h.network.state = (pid) => Response.json({ ...h.state, pid: 200, sessionId: 'two', messages: [{ id: 'b2', role: 'assistant', text: 'Newer' }] });
+  h.network.state = (handle) => Response.json({ ...h.state, handle: 'session-200', instanceId: 'instance-200', status: 'ready', capabilities: { close: true }, sessionId: 'two', messages: [{ id: 'b2', role: 'assistant', text: 'Newer' }] });
   await vm.runInContext('poll()', h.context);
   assert.equal(h.tones.length, 2, 'Sound can be turned off');
   assert.deepEqual(haptics(), ['confirm'], 'Haptics can be turned off');
@@ -1332,7 +1358,7 @@ test('a new reply chimes and vibrates once; switching sessions or loading histor
 test('a background session finishing also announces its reply while the app is open', async () => {
   const h = await setup();
   h.document.listeners.pointerdown();
-  h.sessions.push({ pid: 200, sessionId: 'two', title: 'Background', cwd: '/project', busy: true, spawned: true });
+  h.sessions.push({ handle: 'session-200', instanceId: 'instance-200', status: 'ready', capabilities: { close: true }, sessionId: 'two', title: 'Background', cwd: '/project', busy: true, spawned: true });
   await vm.runInContext('pollSessions()', h.context);
   h.sessions[1].busy = false;
   await vm.runInContext('pollSessions()', h.context);
@@ -1371,42 +1397,56 @@ test('haptics follow actions, and settings reach the native reply receiver', asy
 
 test('a reply notification opens its session', async () => {
   const h = await setup({ native: true });
-  h.network.state = (pid) => Response.json(pid === '300' ? { ...h.state, pid: 300, sessionId: 'three' } : h.state);
-  h.context.window.__piVoiceOpenSession(300);
+  h.network.state = (handle) => Response.json(handle === 'session-300' ? { ...h.state, handle: 'session-300', instanceId: 'instance-300', status: 'ready', capabilities: { close: true }, sessionId: 'three' } : h.state);
+  h.sessions.push({ handle: 'session-300', instanceId: 'instance-300', status: 'ready', sessionId: 'three' });
+  await h.context.window.__piVoiceOpenSession("session-300");
   await flush();
-  assert.equal(h.requests.at(-1).pid, '300');
+  assert.equal(h.requests.at(-1).handle, 'session-300');
   h.context.window.__piVoiceOpenSession('300; alert(1)');
   h.context.window.__piVoiceOpenSession(-1);
   await flush();
-  assert.equal(h.requests.at(-1).pid, '300');
+  assert.equal(h.requests.at(-1).handle, 'session-300');
 });
 
-test('a parallel session killed without cleanup falls back to the main session instead of sticking', async () => {
+test('a notification received before the initial connection waits for discovery and opens its session', async () => {
+  let release;
+  const initial = new Promise((resolve) => { release = resolve; });
+  const h = await setup({ native: true, initialState: () => initial });
+  h.sessions.push({ handle: 'session-300', instanceId: 'instance-300', status: 'ready', sessionId: 'three' });
+  h.network.state = (handle) => Response.json(handle === 'session-300' ? { ...h.state, handle, instanceId: 'instance-300', sessionId: 'three' } : h.state);
+  await h.context.window.__piVoiceOpenSession('session-300');
+  assert.doesNotMatch(h.el('notice')?.textContent || '', /no longer running/);
+  release(Response.json(h.state));
+  await flush(); await flush();
+  assert.equal(vm.runInContext('state.handle', h.context), 'session-300');
+});
+
+test('a parallel session killed without cleanup reloads host selection instead of sticking', async () => {
   const h = await setup();
-  h.sessions.push({ pid: 200, sessionId: 'two', title: 'Two', cwd: '/project', spawned: true });
+  h.sessions.push({ handle: 'session-200', instanceId: 'instance-200', status: 'ready', capabilities: { close: true }, sessionId: 'two', title: 'Two', cwd: '/project', spawned: true });
   await vm.runInContext('pollSessions()', h.context);
-  h.network.state = (pid) => pid === '200' ? Response.json({ error: 'That session stopped responding.' }, { status: 502 }) : Response.json(h.state);
-  await vm.runInContext('selectTarget(200); poll()', h.context);
+  h.network.state = (handle) => handle === 'session-200' ? Response.json({ error: 'That session stopped responding.' }, { status: 502 }) : Response.json(h.state);
+  await vm.runInContext('selectTarget("session-200"); poll()', h.context);
   await flush();
-  assert.equal(h.requests.at(-1).pid, undefined, 'Back on the main session');
-  assert.equal(h.values.get('pi-voice-session-pid'), '', 'The dead target is not remembered');
+  assert.equal(h.requests.at(-1).handle, undefined, 'Re-read the host selection');
+  assert.equal(vm.runInContext('targetHandle', h.context), 'session-100', 'The dead target is not remembered');
   assert.equal(h.el('connection').textContent, 'Ready · project');
 });
 
 test('tapping the current session while another one loads switches back', async () => {
   const h = await setup();
-  h.sessions.push({ pid: 200, sessionId: 'two', title: 'Two', cwd: '/project', spawned: true });
+  h.sessions.push({ handle: 'session-200', instanceId: 'instance-200', status: 'ready', capabilities: { close: true }, sessionId: 'two', title: 'Two', cwd: '/project', spawned: true });
   await vm.runInContext('pollSessions()', h.context);
-  vm.runInContext('switchTo(200)', h.context);
-  vm.runInContext('switchTo(100)', h.context);
+  vm.runInContext("switchTo('session-200')", h.context);
+  vm.runInContext("switchTo('session-100')", h.context);
   await flush();
   await flush();
-  assert.equal(h.values.get('pi-voice-session-pid'), '', 'The second tap wins');
+  assert.equal(vm.runInContext('targetHandle', h.context), 'session-100', 'The second tap wins');
 });
 
 test('Restore joins a launch in flight and survives a lost acknowledgement', async () => {
   const h = await setup();
-  h.stopped.push({ pid: 4321, title: 'Earlier', cwd: '/project', updated: Date.now(), restoring: true });
+  h.stopped.push({ handle: 'restore-4321', restorable: true, title: 'Earlier', cwd: '/project', updated: Date.now(), restoring: true });
   await vm.runInContext('pollSessions(); renderSessions()', h.context);
   await flush();
   vm.runInContext('renderSessions()', h.context);
@@ -1418,7 +1458,47 @@ test('Restore joins a launch in flight and survives a lost acknowledgement', asy
     if (path === '/api/session/restore') throw new TypeError('Network lost');
     return original(path, options);
   })(h.context.fetch);
-  await vm.runInContext('restoreSession({ pid: 4321, title: "Earlier" })', h.context);
+  await vm.runInContext(`restoreSession({ handle: 'restore-4321', restorable: true, title: 'Earlier' })`, h.context);
   assert.match(h.el('notice').textContent, /Checking whether the session was restored/);
   assert.ok(vm.runInContext('spawnRequest', h.context), 'Still watching for the launched Pi; no second POST');
+});
+
+test('empty host stays connected, permits New, and blocks prompt and speech without a session', async () => {
+  const h = await setup({ auto: true });
+  h.sessions.length = 0;
+  h.network.state = () => Response.json({ empty: true, sessionId: '', messages: [], status: 'empty', title: 'Pi Voice' });
+  await vm.runInContext('selectTarget(undefined); poll()', h.context);
+  await vm.runInContext('pollSessions()', h.context);
+  assert.equal(h.el('new-session').disabled, false);
+  assert.equal(h.el('microphone').disabled, true);
+  h.el('draft').value = 'retain me';
+  await vm.runInContext('send()', h.context);
+  assert.deepEqual(h.prompts, []);
+  assert.equal(h.el('draft').value, 'retain me');
+  assert.match(h.el('latest-answer').textContent, /Start a new session/);
+  assert.equal(h.el('reconnect').hidden, true);
+  assert.equal(h.el('stop-host').hidden, false);
+  await vm.runInContext('startNewSession()', h.context);
+  assert.equal(h.requests.filter((r) => r.path === '/api/session/spawn').length, 1);
+});
+
+test('closing the selected first session keeps draft/images and displays Closing until host confirms exit', async () => {
+  const h = await setup({ auto: true });
+  h.el('draft').value = 'my unsent draft';
+  await attach(h);
+  h.network.close = () => { h.sessions[0].status = 'closing'; h.sessions[0].capabilities.close = false; return Response.json({ status: 'closing' }, { status: 202 }); };
+  await vm.runInContext('closeSession(sessions[0])', h.context);
+  assert.equal(h.el('draft').value, 'my unsent draft');
+  assert.equal(h.el('attachments').children.length, 1);
+  assert.equal(h.sessions[0].status, 'closing');
+  assert.deepEqual(h.requests.find((r) => r.path === '/api/session/close').body, { sessionId: 'session-one', instanceId: 'instance-100' });
+});
+
+test('native preference migration imports allowlisted settings without replacing credentials or selection', async () => {
+  const h = await setup();
+  h.context.window.__piVoiceRestorePreferences({ language: 'de-DE', autosend: 'false', sound: 'false', token: 'attacker', 'session-handle': 'attacker' });
+  assert.equal(h.el('language').value, 'de-DE');
+  assert.equal(h.el('sound').checked, false);
+  assert.equal(h.values.get('pi-voice-token'), 'test-token');
+  assert.equal(vm.runInContext('targetHandle', h.context), 'session-100');
 });

@@ -15,11 +15,11 @@ An Android app for talking to the [Pi coding agent](https://github.com/earendil-
 
 ## Features
 
-- **Push-to-talk input** with Android speech recognition. Review and edit the transcript before sending, or turn on auto-send.
+- **Push-to-talk input** with Android speech recognition. Review and edit the transcript, then tap Send.
 - **Focused chat view:** your latest question and Pi's reply with safe Markdown (code, tables, lists). Older messages are in History.
 - **Live activity:** see the tool Pi is running, its output and the reply being written, and jump to Pi's terminal in Termux.
 - **Parallel sessions:** start a new conversation while Pi is still working, and switch between running sessions.
-- **Picks up where you left off:** if the phone or Android stops Pi, the app restarts it and reopens the conversation you had open.
+- **Picks up where you left off:** if the phone or Android stops Pi, the host can reopen saved conversations; surviving Pi processes are reattached without being restarted.
 - **Images:** attach up to four screenshots or photos for vision-capable models.
 - **Read aloud:** listen to a finished reply on request.
 - **Know when Pi is done:** a chime and a light vibration when a reply arrives, and a notification when the app is in the background.
@@ -27,12 +27,13 @@ An Android app for talking to the [Pi coding agent](https://github.com/earendil-
 
 ## How it works
 
-Pi Voice has two parts:
+Pi Voice has three components:
 
-1. **A Pi extension** (this repository, in Termux). It runs inside Pi and serves the chat interface and a small API on `127.0.0.1`, protected by a random token. It submits your messages to Pi exactly like typed prompts.
-2. **The Pi Voice app** (built from [`native/`](native/README.md)). It starts or finds Pi through Termux in the background, then shows the chat in a WebView with Android speech recognition, text-to-speech and an image picker.
+1. **An independent local host** in Termux. It serves the app on one authenticated loopback origin and manages session startup, shutdown, selection, and recovery. It stays available with zero conversations.
+2. **A Pi extension** in each Pi process. It adapts that conversation's messages, activity, and controls. Each app-created Pi runs independently in its own tmux terminal.
+3. **The Android app** (built from [`native/`](native/README.md)). It starts or finds the host through Termux, then displays its interface with native speech, read-aloud, and image picking.
 
-When nothing is running, the app starts Pi in a private tmux server (`tmux -L pi-voice-native`) and keeps it registered with Termux, so no terminal window is needed.
+The host is a registered Termux background task. Its lifetime is independent of any Pi conversation. See the [architecture and implementation notes](docs/session-independent-host-plan.md).
 
 ## Requirements
 
@@ -76,9 +77,9 @@ This sets `allow-external-apps=true` in `~/.termux/termux.properties` (after a b
 3. While Pi works, the line above the reply says what it is doing, for example "bash · npm test". Tap **■** to stop Pi's current task.
 4. Tap the **speaker** beside a finished reply to have it read aloud.
 
-To send each transcript automatically, turn on **Settings → Send automatically after speech**. It is off by default, because a misheard instruction can cause real actions. With images attached, sending always needs a tap.
+Text, speech transcripts and images are sent only when you tap the app’s **Send** button.
 
-On a hardware keyboard, **Ctrl+Enter** sends; Enter adds a new line.
+Return/Enter adds a new line, including on the Android keyboard. Keyboard shortcuts never send the draft.
 
 ### The screen
 
@@ -97,7 +98,9 @@ Tap **+** to start a new conversation:
 
 Tap the session title to see all running sessions and switch between them. The number beside the title counts them and turns blue when a background session finishes a reply. Your draft stays in the composer when you switch; it is never moved into another conversation silently.
 
-Up to 4 sessions can run at once. Each is a full Pi process with its own memory use and model requests. Sessions started with **+** have a **×** to close them; their conversations stay saved in Pi. The session the app is connected through, and any Pi you started yourself in a terminal, are never closed from the app.
+Up to 4 sessions can run at once. Each is a full Pi process with its own memory use and model requests. App-created sessions have a **×** to close them; their conversations stay saved in Pi. Every app-created session, including the first, can be closed. A Pi you started yourself remains externally owned and must be closed in its terminal.
+
+Closing one session leaves the host and other sessions running. Closing the last shows a connected empty screen with **New session**. **Sessions → Stop Pi Voice service** stops the empty host; Reconnect starts it again. Intentional closures are not reopened automatically. Closing a busy session stops its task and shows Closing until its process exits; a timeout is reported instead of pretending it closed.
 
 ### Watching what Pi is doing
 
@@ -115,9 +118,9 @@ The log covers the current task (up to 60 steps) and is kept only in that Pi's m
 
 ### When Pi has stopped
 
-Android can stop Termux while the phone sleeps, after a reboot or when memory runs low. Pi Voice remembers which conversations were open:
+Android can stop Termux while the phone sleeps, after a reboot or when memory runs low. Pi Voice persists session handles and the last selected conversation:
 
-- **Opening the app** starts Pi again and reopens the conversation you last had open, in its original folder. If that conversation has no saved messages yet, Pi continues the most recent session in your home folder instead.
+- **Opening the app** starts Pi again and reopens the conversation you last had open, in its original folder. If no saved conversation is available, use New to start one. An intentionally empty host stays empty across restarts.
 - **Returning to the app** while it shows "Disconnected" restarts Pi once by itself. Otherwise tap **Reconnect** or pull down on the conversation.
 - **Parallel sessions** that stopped appear as "Earlier sessions stopped · Restore" at the top of the chat. Restore them one by one from **Sessions**, or dismiss them; dismissing only hides the entry, the conversation stays saved in Pi.
 
@@ -144,7 +147,7 @@ Notifications come from the Pi extension in Termux, which tells the app when a r
 
 ### Settings
 
-- **Voice input:** auto-send, speech engine (Android speech, or Termux:API as a fallback) and speech language.
+- **Voice input:** speech engine (Android speech, or Termux:API as a fallback) and speech language.
 - **Voice output:** the read-aloud language, for example `en-US` or `de-DE`. Install matching voices in Android's text-to-speech settings.
 - **Replies & feedback:** reply notifications, the reply chime and haptic feedback.
 - **Keep Pi available:** the Termux wake lock (see below).
@@ -168,7 +171,8 @@ npm run setup
 ```
 
 - **Interface changes** apply when you reopen the app.
-- **Backend changes** need a Pi restart. Wait until Pi is idle, open **Activity → Open in Termux**, press **Ctrl+D** at the empty prompt, then open the app again: it starts Pi and reopens your conversation. If Open in Termux is unavailable with an old backend, open Termux yourself and run `tmux -L pi-voice-native attach-session -t =pi-voice` for the app's initial Pi (use `tmux -L pi-voice-native ls` to see other managed sessions). For a Pi started manually, use its original tab. **Settings → About** shows whether a session still runs the old backend, including backends too old to report a version. Reopening the app or installing an APK does not reload a running extension.
+- **Backend changes** need a host restart and a restart of Pi workers whose extension changed. Finish their tasks, close managed sessions, choose **Sessions → Stop Pi Voice service**, then Reconnect. For external Pis, quit/restart them in their original terminals. Settings shows each worker's version.
+- **Upgrading from 2.x to 3.x:** update both the checkout and APK. Older running Pis appear as incompatible and are never taken over or killed. Finish their tasks and restart them; saved recovery records are imported. The first move to the independent host changes the WebView origin. The updated APK preserves known settings when the old page is still available and defers switching while it has an unsent draft or images. If that old page was already destroyed, browser-only settings cannot be recovered automatically; check Settings after updating. Native notification preferences remain in app storage. Older APKs do not understand the new notification targets.
 - **App updates:** download or build the new APK, then run `npm run native:install`. Updates must be signed with the same key as the installed app; see [native/README.md](native/README.md#build-on-termux).
 
 [CHANGELOG.md](CHANGELOG.md) lists what changed in each version.
@@ -181,19 +185,19 @@ npm run setup
 | `/voice stop` | Disconnects the app from this Pi and releases its wake lock. Pi keeps running. |
 | `/voice awake` / `/voice sleep` | Turns the Termux wake lock on or off for this session. |
 
-The bridge starts automatically whenever Pi starts in a terminal, so these are rarely needed.
+The worker adapter starts automatically whenever Pi starts in a terminal. These commands affect only that Pi; they never stop the independent host.
 
 ## Privacy and security
 
-- The bridge listens only on **127.0.0.1** (from port 8765 upwards; each Pi gets its own port). Every API call needs a random 256-bit token stored privately in `~/.pi/agent/voice/token`. Host, origin and fetch-metadata checks block other websites and DNS rebinding.
-- To reach another running session, the app's bridge relays its requests to that session's loopback bridge. Session lists never include tokens or file paths.
-- Restoring a session only takes a process ID from the app. Which session file to open is read from Pi Voice's private state, never from the page.
+- The host and workers listen only on **127.0.0.1**. The host reserves a persistent port starting at 8865; workers use separate ports starting at 8765. Every API call needs a random 256-bit token stored privately in `~/.pi/agent/voice/token`. Host, origin and fetch-metadata checks block other websites and DNS rebinding.
+- The independent host routes explicitly targeted requests to each worker. Session lists expose no tokens, endpoint URLs, or saved-history paths. Process instance checks reject stale targets.
+- Restoring a session only takes an opaque session handle from the app. Which session file to open is read from Pi Voice's private state, never from the page.
 - Open in Termux can only name Pi Voice's own tmux sessions. The app validates the name and runs a fixed command without a shell.
 - The Activity sheet shows tool output, which can include file contents or secrets printed by commands. It stays on the phone, behind the token, and only in memory.
 - Your messages and images go to your configured model provider through Pi and are saved in Pi's session history, like typed prompts. Speech recognition and text-to-speech use Android's selected services, which **may process audio or text online**. Pi Voice stores no audio.
 - Messages you send can trigger real commands and file changes. Review-before-send is the safer default.
 
-To rotate the token, quit all Pi instances, delete `~/.pi/agent/voice/token` and open the app again.
+To rotate the token, quit all Pi instances and stop the Pi Voice service, then delete `~/.pi/agent/voice/token` and open the app again.
 
 ## Troubleshooting
 
@@ -204,7 +208,7 @@ To rotate the token, quit all Pi instances, delete `~/.pi/agent/voice/token` and
 | Disconnected | Tap **Reconnect** or pull down on the conversation. If that fails, open Termux and check `tmux -L pi-voice-native ls`. |
 | Pi keeps stopping in the background | Set Termux's battery use to **Unrestricted** and keep **Keep Termux awake** on. Some vendors need extra background exemptions. |
 | Reconnect reopened a different conversation | The previous one had no saved messages, or its session file is gone. Use `/resume` in Pi via **Open in Termux**. |
-| "Several Pi sessions you started yourself are running" | The app won't guess which one to connect to. Quit the extra Pis in Termux. Sessions started with **+** don't count. |
+| A session shows incompatible | Finish its task and restart that Pi to load the current worker protocol. Multiple external Pis can then be selected normally. |
 | New while busy says tmux is missing | `pkg install tmux` |
 | Activity, About or Restore ask for a Pi restart | That Pi still runs an older backend; see [Updating](#updating). |
 | Open in Termux is greyed out | Install APK 0.1.5+, restart an older Pi backend, and wait for the selected session to connect. Current backends retry failed terminal lookups after a five-second cooldown; give the app a few seconds to recover. For a manually started Pi outside native tmux, use its original Termux tab. |
@@ -220,8 +224,10 @@ To rotate the token, quit all Pi instances, delete `~/.pi/agent/voice/token` and
 
 | Path | Purpose |
 | --- | --- |
-| `extension.mjs` | Pi integration: bridge lifecycle, prompts, sessions, wake lock, activity, `/voice`. |
-| `bridge.mjs` | Authenticated local HTTP API, the relay to other sessions and the Termux:API speech fallback. |
+| `extension.mjs` | Per-process Pi adapter: prompts, activity, wake lock, notifications, and `/voice`. |
+| `host/` | Independent app server, session manager, durable registry, worker client, and tmux launcher. |
+| `bridge.mjs` | One worker's Pi API and Termux:API speech fallback. |
+| `transport.mjs`, `config.mjs`, `storage.mjs` | Shared HTTP boundary, authentication/configuration, and atomic persistence. |
 | `discovery.mjs` | Finds running bridges from private endpoint records. |
 | `running.mjs` | Records which conversations are open, for restoring them after Pi stops. |
 | `activity.mjs` | Bounded in-memory log of Pi's current task. |
@@ -243,6 +249,6 @@ npm run test:native:speech # Java checks: speech chunking (JDK)
 npm run build:native       # Build and sign the APK (Termux; see native/README.md)
 ```
 
-For a Pi installed elsewhere: `PI_VOICE_TEST_PI=/path/to/pi PI_VOICE_TEST_EXTENSION="$PWD/extension.mjs" npm run test:integration`.
+The terminal integration also accepts `PI_VOICE_TEST_PI` and `PI_VOICE_TEST_TMUX` for isolated desktop testing. For a Pi installed elsewhere: `PI_VOICE_TEST_PI=/path/to/pi PI_VOICE_TEST_EXTENSION="$PWD/extension.mjs" npm run test:integration`.
 
 Automated tests cover the interface logic, HTTP behavior, real Pi integration and the native app's Java security checks. Anything that needs a real phone has to be checked there: speech recognition, text-to-speech, the image picker, Termux tab creation, and how long a given vendor lets Pi run in the background.

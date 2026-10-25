@@ -1,7 +1,7 @@
 {
   "name": "pi-voice-termux",
   "private": true,
-  "version": "2.2.0",
+  "version": "3.0.0",
   "type": "module",
   "description": "Native Android voice app for the Pi coding agent running in Termux",
   "repository": { "type": "git", "url": "https://github.com/Endogen/pi-voice.git" },

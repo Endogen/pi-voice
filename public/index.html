@@ -53,13 +53,13 @@
         <p id="image-hint" class="image-hint" hidden>Images send only when you tap Send. Remove any private details first.</p>
         <input id="image-input" type="file" accept="image/jpeg,image/png,image/webp" multiple hidden>
         <label class="sr-only" for="draft">Your message</label>
-        <textarea id="draft" rows="2" maxlength="16000" placeholder="Ask Pi anything…"></textarea>
+        <textarea enterkeyhint="enter" id="draft" rows="2" maxlength="16000" placeholder="Ask Pi anything…"></textarea>
         <div class="prompt-toolbar">
           <button id="attach" class="icon-button" aria-label="Attach images" aria-controls="image-input" title="Attach up to 4 images (JPEG, PNG, WebP)" disabled><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m16 6-8.4 8.4a2 2 0 0 0 2.8 2.8l8.4-8.4a4 4 0 0 0-5.6-5.6L4.8 11.6a6 6 0 0 0 8.5 8.5L20 13.4"/></svg></button>
           <button id="clear" class="icon-button" aria-label="Clear draft and images" title="Clear draft and images" hidden><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M18 6 6 18M6 6l12 12"/></svg></button>
           <span id="listening" class="compose-hint" role="status">Review, then send</span>
           <button id="microphone" class="round-button mic" aria-label="Speak" title="Speak" disabled><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="9" y="2.5" width="6" height="12" rx="3"/><path d="M5 10.5v1a7 7 0 0 0 14 0v-1M12 18.5v3"/></svg><span id="microphone-label" class="sr-only">Speak</span></button>
-          <button id="send" class="round-button send" aria-label="Send" title="Send (Ctrl+Enter)" disabled><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 19V5M5.5 11.5 12 5l6.5 6.5"/></svg></button>
+          <button id="send" class="round-button send" aria-label="Send" title="Send" disabled><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 19V5M5.5 11.5 12 5l6.5 6.5"/></svg></button>
         </div>
       </div>
     </section>
@@ -71,6 +71,7 @@
       <div id="session-list" class="session-list" role="list"></div>
       <div id="stopped-section" hidden><h3 class="list-heading">Stopped earlier</h3><div id="stopped-list" class="session-list" role="list"></div></div>
       <button id="sessions-new" class="wide-button"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg>New session</button>
+      <button id="stop-host" class="quiet" hidden>Stop Pi Voice service</button>
       <p id="sessions-hint" class="hint">A new session started while Pi is working runs alongside it. Up to 4 sessions can run at once; each stays saved in Pi.</p>
     </div>
   </dialog>
@@ -94,7 +95,6 @@
     <div class="sheet-body settings-body">
       <section class="settings-section" aria-label="Speech settings">
         <h3>Voice input</h3>
-        <label class="switch"><span>Send automatically after speech</span><input type="checkbox" id="autosend" role="switch"></label>
         <p class="hint">Off by default, so you can review the transcript first.</p>
         <label for="engine">Speech engine</label>
         <select id="engine"><option id="speech-primary" value="browser">Android speech (recommended)</option><option value="termux">Termux:API (fallback)</option></select>

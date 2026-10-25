@@ -180,6 +180,9 @@ test('extension connects the existing session, queues speech, exposes replies an
   const ep2 = await endpoint();
   assert.equal(ep2.origin, ep.origin);
   assert.equal(ep2.token, ep.token);
+  assert.equal(ep2.instanceId, ep.instanceId, 'Runtime reload retains the process identity');
+  await send('prompt-one', 'hello');
+  assert.equal(replacement.sent.length, 0, 'Reload retains accepted prompt IDs; a lost response cannot duplicate work');
   await replacement.commands.get('voice').handler('stop', replacement.ctx);
   assert.deepEqual(await readdir(join(stateDir, 'endpoints')), []);
 });
@@ -329,60 +332,6 @@ test('extension exposes wake-lock state, responds to app controls and releases i
   assert.deepEqual(await readdir(join(stateDir, 'endpoints')), []);
 });
 
-test('parallel sessions are launched once per request, listed without credentials and never close a user-run Pi', async (t) => {
-  const launched = [];
-  const h = harness('rpc', { launch: async (options) => { launched.push(options); } });
-  await h.events.get('session_start')({ reason: 'startup' }, h.ctx);
-  t.after(() => h.events.get('session_shutdown')({ reason: 'quit' }, h.ctx));
-  const ep = await endpoint();
-  const request = (path, body, headers = {}) => fetch(`${ep.origin}/api/${path}`, {
-    method: body ? 'POST' : 'GET', headers: { Authorization: `Bearer ${ep.token}`, 'Content-Type': 'application/json', ...headers },
-    body: body ? JSON.stringify(body) : undefined,
-  });
-  const state = await (await request('state')).json();
-  assert.deepEqual([state.title, state.spawned], ['Test session', false]);
-  assert.equal(state.voiceVersion, JSON.parse(await readFile(new URL('../package.json', import.meta.url), 'utf8')).version);
-  assert.equal((await request('session/spawn', { id: 'spawn-request-1' })).status, 202);
-  assert.equal((await request('session/spawn', { id: 'spawn-request-1' })).status, 202);
-  assert.deepEqual(launched, [{ id: 'spawn-request-1', cwd: '/test/project' }], 'A retried request does not start a second Pi');
-  const listed = await (await request('sessions')).json();
-  assert.equal(listed.self, process.pid);
-  assert.deepEqual(listed.sessions.map((item) => [item.pid, item.title, item.spawned]), [[process.pid, 'Test session', false]]);
-  assert.equal(JSON.stringify(listed).includes(ep.token), false, 'The session list never exposes the bridge token');
-  assert.equal((await request('session/close', { sessionId: 'test-session' }, { 'X-Pi-Voice-Via': 'hub' })).status, 409);
-  assert.equal(h.shutdowns(), 0);
-});
-
-test('concurrent retries of a parallel-session request launch exactly one Pi', async (t) => {
-  const launched = [];
-  const h = harness('rpc', { launch: async (options) => { launched.push(options); } });
-  await h.events.get('session_start')({ reason: 'startup' }, h.ctx);
-  t.after(() => h.events.get('session_shutdown')({ reason: 'quit' }, h.ctx));
-  const ep = await endpoint();
-  const responses = await Promise.all(Array.from({ length: 4 }, () => fetch(`${ep.origin}/api/session/spawn`, {
-    method: 'POST', headers: { Authorization: `Bearer ${ep.token}`, 'Content-Type': 'application/json' },
-    body: JSON.stringify({ id: 'concurrent-spawn-request' }),
-  })));
-  assert.ok(responses.every((response) => response.status === 202));
-  assert.equal(launched.length, 1, 'An in-flight retry must share the original launch');
-});
-
-test('a failed launch reports its reason and can be retried', async (t) => {
-  let attempts = 0;
-  const h = harness('rpc', { launch: async () => { attempts++; throw Object.assign(new Error('Parallel sessions need tmux.'), { status: 501 }); } });
-  await h.events.get('session_start')({ reason: 'startup' }, h.ctx);
-  t.after(() => h.events.get('session_shutdown')({ reason: 'quit' }, h.ctx));
-  const ep = await endpoint();
-  const spawn = () => fetch(`${ep.origin}/api/session/spawn`, {
-    method: 'POST', headers: { Authorization: `Bearer ${ep.token}`, 'Content-Type': 'application/json' }, body: JSON.stringify({ id: 'spawn-request-2' }),
-  });
-  const response = await spawn();
-  assert.equal(response.status, 501);
-  assert.match((await response.json()).error, /tmux/);
-  await spawn();
-  assert.equal(attempts, 2);
-});
-
 test('extension exposes live activity from Pi events, including for the state poll', async (t) => {
   const h = harness();
   await h.events.get('session_start')({ reason: 'startup' }, h.ctx);
@@ -403,45 +352,6 @@ test('extension exposes live activity from Pi events, including for the state po
   assert.equal((await get('state')).activity.step, undefined);
 });
 
-test('the extension records its open conversation and restores stopped ones by PID', async (t) => {
-  const launched = [];
-  const h = harness('rpc', { launch: async (options) => { launched.push(options); } });
-  const sessionFile = join(temp, 'saved.jsonl');
-  await (await import('node:fs/promises')).writeFile(sessionFile, '{}\n');
-  const currentFile = join(temp, 'current.jsonl');
-  await (await import('node:fs/promises')).writeFile(currentFile, '{}\n');
-  h.ctx.sessionManager.getSessionFile = () => currentFile;
-  h.ctx.cwd = temp;
-  await h.events.get('session_start')({ reason: 'startup' }, h.ctx);
-  t.after(() => h.events.get('session_shutdown')({ reason: 'quit' }, h.ctx));
-  const own = JSON.parse(await readFile(join(stateDir, 'running', `${process.pid}.json`), 'utf8'));
-  assert.deepEqual([own.sessionFile, own.cwd, own.title, own.spawned], [currentFile, temp, 'Test session', false]);
-  // A Pi that the phone stopped left this record behind.
-  const deadPid = 2147480000;
-  await (await import('node:fs/promises')).writeFile(join(stateDir, 'running', `${deadPid}.json`), JSON.stringify({ pid: deadPid, sessionFile, cwd: temp, title: 'Before the phone slept', spawned: true, updated: 1 }));
-  const ep = await endpoint();
-  const request = (path, body) => fetch(`${ep.origin}/api/${path}`, {
-    method: body ? 'POST' : 'GET', headers: { Authorization: `Bearer ${ep.token}`, 'Content-Type': 'application/json' },
-    body: body ? JSON.stringify(body) : undefined,
-  });
-  const listed = await (await request('sessions')).json();
-  assert.deepEqual(listed.stopped, [{ pid: deadPid, title: 'Before the phone slept', cwd: temp, updated: 1, restoring: false }]);
-  assert.equal(JSON.stringify(listed).includes('saved.jsonl'), false, 'Session file paths stay private');
-  assert.equal((await request('session/restore', { id: 'restore-request-1', pid: deadPid })).status, 202);
-  assert.deepEqual(launched, [{ id: 'restore-request-1', cwd: temp, args: ['--session', sessionFile] }]);
-  const pending = (await (await request('sessions')).json()).stopped[0];
-  assert.deepEqual([pending.pid, pending.restoring, pending.updated], [deadPid, true, 1], 'Launch acknowledgement alone must not discard recovery');
-  // A retry or a second tap with a fresh ID joins the launch in flight.
-  assert.deepEqual(await (await request('session/restore', { id: 'restore-request-again', pid: deadPid })).json(), { ok: true, id: 'restore-request-1' });
-  assert.equal(launched.length, 1, 'Never two Pis on one conversation');
-  // Simulate the replacement writing its record only after startup succeeds.
-  await writeRecord(stateDir, { pid: process.ppid, sessionFile, cwd: temp });
-  assert.deepEqual((await (await request('sessions')).json()).stopped, []);
-  assert.equal((await request('session/restore', { id: 'restore-request-2', pid: deadPid })).status, 410);
-  assert.equal((await request('session/restore', { id: 'restore-request-3', pid: process.pid })).status, 410, 'A running Pi is never restored twice');
-  assert.equal((await request('session/restore', { id: 'restore-request-4', pid: '../x' })).status, 400);
-});
-
 test('a finished run with a new reply alerts the app once; runs without one do not', async (t) => {
   const alerts = [];
   const h = harness('rpc', { alert: (details) => alerts.push(details) });
@@ -460,10 +370,10 @@ test('a finished run with a new reply alerts the app once; runs without one do n
   assert.equal(alerts.length, 1, 'A repeated settle does not alert twice');
 });
 
-test('closing a busy app-started session aborts its task and keeps it out of Restore', async (t) => {
-  process.env.PI_VOICE_SPAWN_ID = 'spawned-for-test-1';
+test('closing a managed worker aborts its task; host retains ownership of recovery decisions', async (t) => {
+  process.env.PI_VOICE_MANAGED_ID = 'managed-session-1';
   const { default: installSpawned } = await import('../extension.mjs?spawned');
-  delete process.env.PI_VOICE_SPAWN_ID;
+  delete process.env.PI_VOICE_MANAGED_ID;
   const sessionFile = join(temp, 'closing.jsonl');
   await (await import('node:fs/promises')).writeFile(sessionFile, '{}\n');
   const events = new Map();
@@ -481,7 +391,7 @@ test('closing a busy app-started session aborts its task and keeps it out of Res
   t.after(() => events.get('session_shutdown')({ reason: 'quit' }, ctx));
   const ep = JSON.parse(await readFile(join(stateDir, 'endpoints', `${process.pid}.json`), 'utf8'));
   const response = await fetch(`${ep.origin}/api/session/close`, {
-    method: 'POST', headers: { Authorization: `Bearer ${ep.token}`, 'Content-Type': 'application/json', 'X-Pi-Voice-Via': 'hub' },
+    method: 'POST', headers: { Authorization: `Bearer ${ep.token}`, 'Content-Type': 'application/json' },
     body: JSON.stringify({ sessionId: 'closing' }),
   });
   assert.equal(response.status, 202);
@@ -490,7 +400,7 @@ test('closing a busy app-started session aborts its task and keeps it out of Res
   // Pi settles the aborted run before exiting: that must not write the record back.
   events.get('agent_settled')({}, ctx);
   await new Promise((resolve) => setTimeout(resolve, 50));
-  await assert.rejects(readFile(join(stateDir, 'running', `${process.pid}.json`), 'utf8'));
+  assert.equal(JSON.parse(await readFile(join(stateDir, 'running', `${process.pid}.json`), 'utf8')).sessionId, 'closing');
 });
 
 test('stay-awake survives a /reload of the extension', async (t) => {

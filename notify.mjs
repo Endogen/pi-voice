@@ -19,17 +19,17 @@ export function excerpt(markdown, max = 240) {
   return text.length > max ? `${text.slice(0, max - 1).trimEnd()}…` : text;
 }
 
-export function replySignature(token, { pid, time, title, text }) {
-  return createHmac('sha256', token).update(`${pid}\n${time}\n${title}\n${text}`).digest('hex');
+export function replySignature(token, { pid, handle, time, title, text }) {
+  return createHmac('sha256', token).update(`2\n${handle}\n${pid}\n${time}\n${title}\n${text}`).digest('hex');
 }
 
 /** Sends the broadcast through Termux's `am`. Returns false off Android. */
-export function sendReplyAlert({ token, pid, title, text, time = Date.now(), env = process.env, run = execFile }) {
+export function sendReplyAlert({ token, pid, handle, title, text, time = Date.now(), env = process.env, run = execFile }) {
   const prefix = env.PREFIX || '';
-  if (!prefix.includes('com.termux') || !/^[a-f0-9]{64}$/.test(token || '')) return false;
-  const fields = { pid, time, title: plain(title).slice(0, limits.title), text: excerpt(text, limits.text) || 'Reply ready.' };
+  if (!/^[a-zA-Z0-9-]{8,80}$/.test(handle || '') || !prefix.includes('com.termux') || !/^[a-f0-9]{64}$/.test(token || '')) return false;
+  const fields = { pid, handle, time, title: plain(title).slice(0, limits.title), text: excerpt(text, limits.text) || 'Reply ready.' };
   const args = ['broadcast', '-f', '32', '-n', 'com.pivoice.app/.ReplyReceiver', '-a', 'com.pivoice.app.REPLY',
-    '--ei', 'pid', String(pid), '--el', 'time', String(time), '--es', 'title', fields.title, '--es', 'text', fields.text,
+    '--ei', 'version', '2', '--es', 'handle', handle, '--ei', 'pid', String(pid), '--el', 'time', String(time), '--es', 'title', fields.title, '--es', 'text', fields.text,
     '--es', 'signature', replySignature(token, fields)];
   // No shell; failures (no app installed, older app) are not Pi's problem.
   run(join(prefix, 'bin', 'am'), args, { timeout: 15000 }, () => {});

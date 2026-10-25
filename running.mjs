@@ -1,5 +1,6 @@
-import { mkdir, readdir, readFile, rm, stat, writeFile } from 'node:fs/promises';
+import { mkdir, readdir, readFile, rm, stat } from 'node:fs/promises';
 import { isAbsolute, join } from 'node:path';
+import { atomicJSON } from './storage.mjs';
 import { processIdentity } from './wake-lock.mjs';
 
 // One private record per running voice-enabled Pi: which conversation it has
@@ -11,7 +12,7 @@ const recordName = /^[1-9]\d{0,9}\.json$/;
 
 export async function writeRecord(directory, record) {
   await mkdir(folder(directory), { recursive: true, mode: 0o700 });
-  await writeFile(join(folder(directory), `${record.pid}.json`), JSON.stringify({ ...record, updated: Date.now() }), { mode: 0o600 });
+  await atomicJSON(join(folder(directory), `${record.pid}.json`), { ...record, updated: Date.now() });
 }
 
 export async function removeRecord(directory, pid) {
@@ -27,11 +28,6 @@ export async function alive(pid, record) {
   if (!record?.identity) return true;
   const now = await processIdentity(pid);
   return !now || now === record.identity;
-}
-
-/** Marks a stopped record as being restored, without changing its age. */
-export async function markRestoring(directory, record, id) {
-  await writeFile(join(folder(directory), `${record.pid}.json`), JSON.stringify({ ...record, restoring: { id, at: Date.now() } }), { mode: 0o600 });
 }
 
 // Only a saved session file in an existing folder can be resumed. Anything
@@ -61,9 +57,4 @@ export async function stoppedRecords(directory, { isAlive = alive } = {}) {
     else await removeRecord(directory, pid);
   }
   return records.sort((a, b) => (b.updated || 0) - (a.updated || 0));
-}
-
-/** One stopped record by PID, re-validated, or undefined. */
-export async function stoppedRecord(directory, pid, options) {
-  return (await stoppedRecords(directory, options)).find((record) => record.pid === pid);
 }

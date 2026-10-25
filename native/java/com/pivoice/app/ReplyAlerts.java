@@ -12,11 +12,11 @@ final class ReplyAlerts {
     private ReplyAlerts() {}
 
     /** HMAC-SHA256 with the bridge token over all fields, as lowercase hex. */
-    static String signature(String token, int pid, long time, String title, String text) {
+    static String signature(String token, String handle, int pid, long time, String title, String text) {
         try {
             Mac mac = Mac.getInstance("HmacSHA256");
             mac.init(new SecretKeySpec(token.getBytes(StandardCharsets.UTF_8), "HmacSHA256"));
-            byte[] digest = mac.doFinal((pid + "\n" + time + "\n" + title + "\n" + text).getBytes(StandardCharsets.UTF_8));
+            byte[] digest = mac.doFinal(("2\n" + handle + "\n" + pid + "\n" + time + "\n" + title + "\n" + text).getBytes(StandardCharsets.UTF_8));
             StringBuilder hex = new StringBuilder();
             for (byte b : digest) hex.append(String.format("%02x", b & 0xff));
             return hex.toString();
@@ -24,11 +24,11 @@ final class ReplyAlerts {
     }
 
     /** Only the extension holding this app's bridge token can raise a notification. */
-    static boolean verify(String token, String signature, int pid, long time, String title, String text, long now) {
+    static boolean verify(String token, String signature, String handle, int pid, long time, String title, String text, long now) {
         if (token == null || !token.matches("[a-f0-9]{64}") || signature == null || !signature.matches("[a-f0-9]{64}")) return false;
-        if (pid < 1 || title == null || text == null || title.length() > MAX_TITLE || text.length() > MAX_TEXT) return false;
+        if (handle == null || !handle.matches("[a-zA-Z0-9-]{8,80}") || pid < 1 || title == null || text == null || title.length() > MAX_TITLE || text.length() > MAX_TEXT) return false;
         if (Math.abs(now - time) > MAX_AGE_MS) return false;
-        String expected = signature(token, pid, time, title, text);
+        String expected = signature(token, handle, pid, time, title, text);
         return expected != null && MessageDigest.isEqual(expected.getBytes(StandardCharsets.US_ASCII), signature.getBytes(StandardCharsets.US_ASCII));
     }
 }

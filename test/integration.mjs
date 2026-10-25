@@ -2,7 +2,6 @@
 // before any provider call; this never uses API credit or a real Android lock.
 import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
-import http from 'node:http';
 import { mkdtemp, readdir, readFile, rm } from 'node:fs/promises';
 import { homedir, tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -76,20 +75,10 @@ try {
   assert.equal((await awakeResponse.json()).wakeLock.active, false);
   // Never acquire/release the real shared Android lock during a smoke test.
   assert.equal((await fetch(`${endpoint.origin}/api/state`)).status, 401);
-  const shell = await fetch(endpoint.origin);
-  assert.equal(shell.status, 200);
-  const html = await shell.text();
-  for (const id of ['latest-question', 'latest-answer', 'thinking', 'history-dialog', 'awake', 'new-session', 'attach', 'image-input', 'attachments']) assert.ok(html.includes(`id="${id}"`));
-  const launchStatus = await new Promise((resolve, reject) => {
-    http.get(endpoint.origin, { headers: {
-      'Sec-Fetch-Site': 'cross-site', 'Sec-Fetch-Mode': 'navigate',
-      'Sec-Fetch-Dest': 'document', 'Sec-Fetch-User': '?1',
-    } }, (res) => { res.resume(); resolve(res.statusCode); }).on('error', reject);
-  });
-  assert.equal(launchStatus, 200, 'An app-initiated load must open the public page');
+  assert.equal((await fetch(endpoint.origin)).status, 404, 'Workers do not serve the app');
   assert.equal((await fetch(`${endpoint.origin}/api/state`, { headers: {
     Authorization: `Bearer ${endpoint.token}`, 'Sec-Fetch-Site': 'cross-site',
-  } })).status, 403, 'External launch exception must not apply to the API');
+  } })).status, 403);
   const abort = await fetch(`${endpoint.origin}/api/abort`, {
     method: 'POST', headers: { Authorization: `Bearer ${endpoint.token}`, 'Content-Type': 'application/json' },
     body: JSON.stringify({ sessionId: state.sessionId }),
@@ -170,7 +159,7 @@ try {
   assert.equal(exit.code, 0, stderr);
   assert.deepEqual(await readdir(endpoints), []);
   await assert.rejects(fetch(`${endpoint.origin}/api/state`));
-  console.log('PASS: real Pi serves/authenticates the UI, survives two RPC session replacements, preserves its port/token, rejects stale actions, receives native text+image and image-only inputs once despite retries, aborts and shuts down cleanly. No model/API calls or Android wake-lock changes made.');
+  console.log('PASS: real Pi authenticates its worker API, survives two RPC session replacements, preserves its port/token, rejects stale actions, receives native text+image and image-only inputs once despite retries, aborts and shuts down cleanly. No model/API calls or Android wake-lock changes made.');
 } finally {
   if (child.exitCode === null) child.kill('SIGTERM');
   await exited.catch(() => {});

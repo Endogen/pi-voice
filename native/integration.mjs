@@ -1,155 +1,79 @@
-// Real on-device tmux PTY + installed Pi, isolated discovery/session directory.
-// No provider prompts, real wake locks or user-session changes.
+// Real interactive Pi in isolated tmux PTYs, using the production host,
+// registry, launcher and worker extension. No model requests or user data.
 import assert from 'node:assert/strict';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
-import { mkdir, mkdtemp, rm, writeFile, symlink } from 'node:fs/promises';
+import { mkdtemp, rm, readFile, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { homedir, tmpdir } from 'node:os';
 import { randomUUID } from 'node:crypto';
 import { setTimeout as delay } from 'node:timers/promises';
-import { runNativeHost } from './host.mjs';
-import { discoverConnections, waitForConnection } from './connection.mjs';
-import { stoppedRecords, writeRecord } from '../running.mjs';
-import { detectTerminal } from '../extension.mjs';
+import { createHost } from '../host/server.mjs';
+import { createLauncher } from '../host/launcher.mjs';
+import { discoverHost } from './connection.mjs';
 
-const directory = await mkdtemp(join(tmpdir(), 'pi-voice-native-pty-'));
-const socket = `pi-voice-test-${randomUUID().slice(0, 8)}`;
-const tmux = join(process.env.PREFIX || '/data/data/com.termux/files/usr', 'bin/tmux');
 const exec = promisify(execFile);
-const isolatedExtension = join(directory, 'voice-extension.mjs');
-const options = {
-  directory: join(directory, 'voice'), socket, interval: 100,
-  pi: join(homedir(), '.pi/agent/bin/pi'), cwd: directory,
-  args: ['--no-session', '--offline', '--no-context-files', '--no-skills', '--no-prompt-templates', '--no-themes', '--no-tools', '--no-extensions', '--provider', 'openai', '--model', 'gpt-4o', '-e', isolatedExtension],
-  env: { ...process.env, PI_CODING_AGENT_DIR: directory, TERM: 'xterm-256color' },
-};
-// Exercise the production launcher and HTTP spawn/relay routes, but force every
-// child onto our isolated tmux server with all user extensions/tools disabled.
-await writeFile(isolatedExtension, `import install, { launchSession } from ${JSON.stringify(new URL('../extension.mjs', import.meta.url).href)};
-export default pi => install(pi, { launch: request => launchSession(request, ${JSON.stringify({ socket, command: [options.pi, ...options.args] })}) });
-`, { mode: 0o600 });
-let hostFailure;
-let resumedHost;
-const host = runNativeHost(options).catch((error) => { hostFailure = error; });
+const root = await mkdtemp(join(tmpdir(), 'pi-voice-pty-'));
+const directory = join(root, 'voice');
+const socket = `pi-voice-test-${randomUUID().slice(0, 8)}`;
+const pi = process.env.PI_VOICE_TEST_PI || join(homedir(), '.pi/agent/bin/pi');
+const tmux = process.env.PI_VOICE_TEST_TMUX || (process.env.PREFIX ? join(process.env.PREFIX, 'bin/tmux') : 'tmux');
+const options = { socket, pi, tmux, env: { ...process.env, PI_CODING_AGENT_DIR: root, TERM: 'xterm-256color' },
+  args: ['--offline', '--no-context-files', '--no-skills', '--no-prompt-templates', '--no-themes', '--no-tools', '--no-extensions',
+    '--provider', 'openai', '--model', 'gpt-4o', '-e', new URL('../extension.mjs', import.meta.url).pathname,
+    '-e', new URL('../test/fixtures/hold-input.mjs', import.meta.url).pathname] };
+let host;
+let token;
+async function start() { host = await createHost({ directory, port: 0, interval: 100, launcher: createLauncher(options), managerOptions: { cwd: root } }); await host.ready; token = (await readFile(join(directory, 'token'), 'utf8')).trim(); }
+async function request(path, body, entry) {
+  const response = await fetch(`${host.origin}/api/${path}`, { method: body === undefined ? 'GET' : 'POST',
+    headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json', ...(entry ? { 'X-Pi-Voice-Session': entry.handle, 'X-Pi-Voice-Instance': entry.instanceId } : {}) },
+    body: body === undefined ? undefined : JSON.stringify(body) });
+  const result = await response.json();
+  assert.ok(response.ok, `${path}: ${response.status} ${result.error || ''}`);
+  return result;
+}
+async function until(check, label) {
+  const end = Date.now() + 30000;
+  while (Date.now() < end) { const result = await check(); if (result) return result; await delay(100); }
+  throw new Error(`Timed out: ${label}`);
+}
 try {
-  const connection = await waitForConnection({ directory: options.directory });
-  if (hostFailure) throw hostFailure;
-  assert.match(connection.url, /^http:\/\/127\.0\.0\.1:\d+\/#\w{64}$/);
-  const url = new URL(connection.url);
-  const headers = { Authorization: `Bearer ${url.hash.slice(1)}`, 'Content-Type': 'application/json' };
-  const state = await fetch(`${url.origin}/api/state`, { headers }).then((response) => response.json());
-  assert.equal(state.busy, false);
-  assert.equal(state.sessionPersistent, false);
-  assert.equal(state.imageAttachments.maxCount, 4);
-  assert.equal(state.modelSupportsImages, true);
-  assert.equal(state.wakeLock.active, false);
-  assert.deepEqual(await runNativeHost(options), { reused: true });
-  const sessions = await exec(tmux, ['-L', socket, 'list-sessions', '-F', '#{session_name}']);
-  assert.equal(sessions.stdout.trim(), 'pi-voice', 'Retapping must reuse the same PTY');
-
-  const spawnId = randomUUID();
-  for (let retry = 0; retry < 2; retry++) {
-    const spawned = await fetch(`${url.origin}/api/session/spawn`, {
-      method: 'POST', headers, body: JSON.stringify({ id: spawnId }),
-    });
-    assert.equal(spawned.status, 202, await spawned.text());
-  }
-  let parallel;
-  const spawnDeadline = Date.now() + 25000;
-  while (Date.now() < spawnDeadline) {
-    const list = await fetch(`${url.origin}/api/sessions`, { headers }).then((result) => result.json());
-    parallel = list.sessions.find((item) => item.spawnId === spawnId);
-    if (parallel) { assert.equal(list.sessions.length, 2, 'A retried New creates just one additional Pi'); break; }
-    await delay(100);
-  }
-  assert.ok(parallel, 'The app must discover a real spawned TUI');
-  assert.notEqual(parallel.sessionId, state.sessionId);
-  assert.equal((await fetch(`${url.origin}/api/state`, { headers: { ...headers, 'X-Pi-Voice-Pid': String(parallel.pid) } }).then((result) => result.json())).sessionId, parallel.sessionId, 'Switch to the second Pi through the original bridge');
-  assert.equal((await fetch(`${url.origin}/api/state`, { headers }).then((result) => result.json())).sessionId, state.sessionId, 'Switch back without replacing the original conversation');
-  // Alias only THIS test socket to the validated production basename. Explicit
-  // -S selection must win over the parent test process's live TMUX environment.
-  const socketPath = (await exec(tmux, ['-L', socket, 'display-message', '-p', '#{socket_path}'])).stdout.trim();
-  const socketAlias = join(directory, 'pi-voice-native');
-  await symlink(socketPath, socketAlias);
-  for (const session of (await exec(tmux, ['-L', socket, 'list-sessions', '-F', '#S'])).stdout.trim().split('\n')) {
-    const pane = (await exec(tmux, ['-L', socket, 'display-message', '-p', '-t', `=${session}:0.0`, '#{pane_id}'])).stdout.trim();
-    assert.deepEqual(await detectTerminal({ TMUX: `${socketAlias},0,0`, TMUX_PANE: pane }), { session }, 'Terminal detection resolves the exact Pi, not the ambient tmux client');
-  }
-  const closed = await fetch(`${url.origin}/api/session/close`, {
-    method: 'POST', headers: { ...headers, 'X-Pi-Voice-Pid': String(parallel.pid) }, body: JSON.stringify({ sessionId: parallel.sessionId }),
-  });
-  assert.equal(closed.status, 202, await closed.text());
-  const closeDeadline = Date.now() + 10000;
-  while ((await discoverConnections(options.directory)).length > 1 && Date.now() < closeDeadline) await delay(100);
-  assert.equal((await discoverConnections(options.directory)).length, 1);
-
-  // Keep testing the legacy in-place endpoint for terminal /new compatibility;
-  // the app's New button now uses only spawn so both originals remain listed.
-  const response = await fetch(`${url.origin}/api/session/new`, {
-    method: 'POST', headers, body: JSON.stringify({ id: randomUUID(), sessionId: state.sessionId }),
-  });
-  assert.equal(response.status, 202);
-  let next;
-  const deadline = Date.now() + 20000;
-  while (Date.now() < deadline) {
-    next = await fetch(`${url.origin}/api/state`, { headers }).then((result) => result.json()).catch(() => undefined);
-    if (next?.sessionId && next.sessionId !== state.sessionId) break;
-    await delay(100);
-  }
-  assert.ok(next?.sessionId && next.sessionId !== state.sessionId, 'New session must also work in an actual TUI PTY');
-  assert.equal((await discoverConnections(options.directory))[0].url, connection.url, 'Session replacement must keep the connection');
-  const staleStop = await fetch(`${url.origin}/api/abort`, {
-    method: 'POST', headers, body: JSON.stringify({ sessionId: state.sessionId }),
-  });
-  assert.equal(staleStop.status, 409, 'An old native view must not abort the new TUI session');
-  await exec(tmux, ['-L', socket, 'send-keys', '-t', '=pi-voice:0.0', 'C-d']);
-  await Promise.race([host, delay(10000).then(() => { throw new Error('Native host did not exit with its Pi PTY'); })]);
-  if (hostFailure) throw hostFailure;
-  // A tmux pane can be created successfully even when Pi then fails to start.
-  // Recovery must remain available, including older main conversations.
-  // Pi migrates legacy *.jsonl files in the agent root before CLI startup;
-  // keep fixtures in a subdirectory, like real persisted conversations.
-  await mkdir(join(directory, 'saved'), { recursive: true });
-  const sessionFile = join(directory, 'saved', 'saved.jsonl');
-  const olderFile = join(directory, 'saved', 'older.jsonl');
-  await writeFile(sessionFile, '{}\n');
-  await writeFile(olderFile, '{}\n');
-  await writeRecord(options.directory, { pid: 2147480000, sessionFile: olderFile, cwd: directory });
-  await writeRecord(options.directory, { pid: 2147480001, sessionFile, cwd: directory });
-  const failedPi = join(directory, 'failed-pi');
-  await writeFile(failedPi, `#!${process.execPath}\nsetTimeout(() => process.exit(17), 200);\n`, { mode: 0o700 });
-  await runNativeHost({ ...options, args: undefined, pi: failedPi });
-  assert.deepEqual((await stoppedRecords(options.directory)).map((record) => record.pid).sort(), [2147480000, 2147480001], 'A failed restart must not discard any recoverable conversation');
-  // Exercise the successful restore plan against real Pi, with a synthetic
-  // saved conversation rather than any user data or provider-generated output.
-  const savedId = randomUUID();
-  const timestamp = new Date().toISOString();
-  const zeroUsage = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } };
-  await writeFile(sessionFile, [
-    { type: 'session', version: 3, id: savedId, cwd: directory, timestamp },
-    { type: 'message', id: '00000001', parentId: null, timestamp, message: { role: 'user', content: 'Saved recovery question', timestamp: Date.now() } },
-    { type: 'message', id: '00000002', parentId: '00000001', timestamp, message: { role: 'assistant', content: [{ type: 'text', text: 'Saved recovery answer' }], api: 'openai-completions', provider: 'openai', model: 'gpt-4o', usage: zeroUsage, stopReason: 'stop', timestamp: Date.now() } },
-  ].map((entry) => JSON.stringify(entry)).join('\n') + '\n');
-  await writeRecord(options.directory, { pid: 2147480001, sessionId: savedId, sessionFile, cwd: directory });
-  const isolatedPi = join(directory, 'isolated-pi');
-  const flags = options.args.filter((arg) => arg !== '--no-session');
-  await writeFile(isolatedPi, `#!${process.execPath}\nconst { spawn } = require('node:child_process');\nconst child = spawn(${JSON.stringify(options.pi)}, ${JSON.stringify(flags)}.concat(process.argv.slice(2)), { stdio: 'inherit' });\nchild.on('error', () => process.exit(1));\nchild.on('exit', (code) => process.exit(code ?? 1));\n`, { mode: 0o700 });
-  resumedHost = runNativeHost({ ...options, args: undefined, pi: isolatedPi }).catch((error) => { hostFailure = error; });
-  const resumed = new URL((await waitForConnection({ directory: options.directory })).url);
-  if (hostFailure) throw hostFailure;
-  const restored = await fetch(`${resumed.origin}/api/state`, { headers: { Authorization: `Bearer ${resumed.hash.slice(1)}` } }).then((response) => response.json());
-  assert.equal(restored.sessionId, savedId, 'Cold restart must reopen exactly the saved conversation');
-  assert.equal(restored.cwd, directory);
-  assert.equal(restored.messages.at(-1).text, 'Saved recovery answer');
-  assert.deepEqual((await stoppedRecords(options.directory)).map((record) => record.pid), [2147480000], 'Only the resumed conversation is retired, not an older stopped one');
-  await exec(tmux, ['-L', socket, 'send-keys', '-t', '=pi-voice:0.0', 'C-d']);
-  await Promise.race([resumedHost, delay(10000).then(() => { throw new Error('Resumed host did not exit'); })]);
-  if (hostFailure) throw hostFailure;
-  console.log('Native PTY integration passed: real Pi cold start, discovery, retap reuse, parallel spawn/retry/list/relay/switch-back/close, exact terminal targets, legacy new session, same connection, clean exit, failed-start preservation and exact saved-conversation recovery. No provider calls.');
+  await exec(pi, ['--version']); await exec(tmux, ['-V']);
+  await start();
+  const first = await until(async () => (await request('sessions')).sessions.find((e) => e.status === 'ready'), 'first Pi');
+  const origin = host.origin;
+  const operation = randomUUID();
+  const launched = await request('session/spawn', { id: operation }, first);
+  assert.equal((await request('session/spawn', { id: operation }, first)).handle, launched.handle);
+  const second = await until(async () => (await request('sessions')).sessions.find((e) => e.handle === launched.handle && e.status === 'ready'), 'second Pi');
+  await request('session/select', { handle: second.handle });
+  await request('prompt', { id: randomUUID(), sessionId: second.sessionId, text: 'pi-voice-integration-hold' }, second);
+  const progress = () => readFile(join(root, 'work-progress'), 'utf8').then(Number).catch(() => 0);
+  await until(async () => await progress() > 2, 'Pi extension doing work');
+  const before = await progress();
+  await request('session/close', { sessionId: first.sessionId, instanceId: first.instanceId }, first);
+  await until(async () => !(await request('sessions')).sessions.some((e) => e.handle === first.handle), 'first Pi exit');
+  await until(async () => await progress() > before + 3, 'second Pi continues after first closes');
+  assert.equal((await request('state', undefined, second)).pid, second.pid);
+  assert.equal((await discoverHost(directory)).url, host.url);
+  assert.equal(host.origin, origin);
+  await writeFile(join(root, 'release-work'), 'release');
+  await until(() => readFile(join(root, 'work-finished'), 'utf8').catch(() => null), 'second Pi finishes');
+  await host.close(); await start();
+  assert.equal(host.origin, origin);
+  assert.equal((await request('state')).pid, second.pid, 'Host restart preserves selected survivor');
+  assert.equal((await request('sessions')).sessions.length, 1);
+  await request('session/close', { sessionId: second.sessionId, instanceId: second.instanceId }, second);
+  await until(async () => (await request('sessions')).sessions.length === 0, 'last Pi exit');
+  assert.equal((await request('state')).empty, true);
+  await host.close(); await start();
+  assert.equal((await request('sessions')).sessions.length, 0, 'Empty remains empty on restart');
+  const third = await request('session/spawn', { id: randomUUID() });
+  await until(async () => (await request('sessions')).sessions.find((e) => e.handle === third.handle && e.status === 'ready'), 'new Pi from empty state');
+  console.log('PASS: real Pi/tmux first-session closure preserves another Pi’s running extension operation and the host origin; completion, host restart/adoption, last-session close, empty restart, and New from empty. No provider calls.');
 } finally {
+  await host?.close();
   await exec(tmux, ['-L', socket, 'kill-server']).catch(() => {});
-  await host;
-  await resumedHost;
-  await rm(directory, { recursive: true, force: true });
+  await rm(root, { recursive: true, force: true });
 }

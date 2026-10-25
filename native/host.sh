@@ -11,5 +11,5 @@ fi
 voice_dir="${PI_CODING_AGENT_DIR:-$HOME/.pi/agent}/voice"
 mkdir -p "$voice_dir"
 chmod 700 "$voice_dir"
-# Nonblocking, success-on-contention: the other launcher is already starting Pi.
+# Nonblocking, success-on-contention: the independent host is already running or starting.
 exec "$PREFIX/bin/flock" -n -E 0 "$voice_dir/app-launch.lock" "$PREFIX/bin/node" "$HOME/pi-voice/native/host.mjs"

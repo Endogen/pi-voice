@@ -1,56 +1,7 @@
-import http from 'node:http';
-import { createHash, timingSafeEqual } from 'node:crypto';
-import { readFile } from 'node:fs/promises';
+import { createHash } from 'node:crypto';
 import { execFile } from 'node:child_process';
-import { fileURLToPath } from 'node:url';
 import { imageLimits, validateImages } from './image-attachments.mjs';
-
-const publicDir = fileURLToPath(new URL('./public/', import.meta.url));
-const assets = new Map([
-  ['/', ['index.html', 'text/html; charset=utf-8']],
-  ['/app.js', ['app.js', 'text/javascript; charset=utf-8']],
-  ['/style.css', ['style.css', 'text/css; charset=utf-8']],
-  ['/icon.svg', ['icon.svg', 'image/svg+xml']],
-  ['/icon-192.png', ['icon-192.png', 'image/png']],
-]);
-
-function fail(status, message) {
-  return Object.assign(new Error(message), { status });
-}
-
-async function readJSON(req, maxBytes = 64 * 1024) {
-  if (!(req.headers['content-type'] || '').startsWith('application/json')) {
-    throw fail(415, 'Expected application/json.');
-  }
-  const body = await new Promise((resolve, reject) => {
-    const chunks = [];
-    let size = 0;
-    let tooLarge = false;
-    req.on('data', (chunk) => {
-      if (tooLarge) return; // Drain without buffering; preserve the socket for a 413 response.
-      size += chunk.length;
-      if (size > maxBytes) {
-        tooLarge = true;
-        chunks.length = 0;
-        reject(fail(413, 'Request is too large.'));
-      } else chunks.push(chunk);
-    });
-    req.once('end', () => { if (!tooLarge) resolve(Buffer.concat(chunks).toString('utf8')); });
-    req.once('error', reject);
-    req.once('aborted', () => reject(fail(400, 'Request interrupted.')));
-  });
-  try {
-    return JSON.parse(body);
-  } catch {
-    throw fail(400, 'Invalid JSON.');
-  }
-}
-
-function authenticated(req, token) {
-  const actual = Buffer.from(req.headers.authorization || '');
-  const expected = Buffer.from(`Bearer ${token}`);
-  return actual.length === expected.length && timingSafeEqual(actual, expected);
-}
+import { createApiServer, fail, readJSON } from './transport.mjs';
 
 export function termuxSpeech({ signal, timeout = 45000 } = {}) {
   const prefix = process.env.PREFIX || '/data/data/com.termux/files/usr';
@@ -79,94 +30,19 @@ export function termuxSpeech({ signal, timeout = 45000 } = {}) {
   });
 }
 
-// Relay one authenticated API request to another local Pi bridge sharing this
-// token. The page stays on one origin, so the WebView needs no cross-origin
-// access and the native request policy stays strict.
-function forward(req, res, origin, pid) {
-  return new Promise((resolve) => {
-    const url = new URL(req.url, origin);
-    // The target PID travels along: a different Pi that reused a dead
-    // session's port rejects the request instead of answering for it.
-    const headers = { authorization: req.headers.authorization, host: url.host, 'x-pi-voice-via': 'hub', 'x-pi-voice-pid': String(pid) };
-    for (const name of ['content-type', 'content-length']) if (req.headers[name]) headers[name] = req.headers[name];
-    const upstream = http.request(url, { method: req.method, headers }, (reply) => {
-      res.writeHead(reply.statusCode, { 'Content-Type': reply.headers['content-type'] || 'application/json; charset=utf-8' });
-      reply.pipe(res);
-      reply.once('end', resolve);
-      reply.once('error', () => { res.destroy(); resolve(); });
-    });
-    upstream.once('error', (error) => {
-      if (!res.headersSent) {
-        // Nothing listening: that Pi is gone (killed without cleaning up).
-        const gone = error.code === 'ECONNREFUSED';
-        res.writeHead(gone ? 410 : 502, { 'Content-Type': 'application/json; charset=utf-8' });
-        res.end(JSON.stringify({ error: gone ? 'That session is no longer running.' : 'That session stopped responding. Switch sessions and try again.' }));
-      } else res.destroy();
-      resolve();
-    });
-    // Closing the browser request (e.g. cancelling Android speech) cancels the relay.
-    res.once('close', () => { if (!res.writableFinished) upstream.destroy(); });
-    req.pipe(upstream);
-  });
-}
-
-/** Local-only, authenticated transport. The extension owns the actual Pi session. */
-export async function createVoiceBridge({
-  token, getState, getActivity, onPrompt, onAbort, onAwake, onNewSession, onSpawn, onClose, onRestore, onForget, listSessions, listStopped, peerOrigin,
-  pid = process.pid, speech = termuxSpeech, port = 8765,
-}) {
-  if (!token || token.length < 32) throw new Error('A strong voice bridge token is required.');
-  let origin;
-  let closing = false;
+/** Adapter for exactly one Pi process. No discovery, launch, or peer relay. */
+export async function createVoiceBridge({ token, getState, getActivity, onPrompt, onAbort, onAwake, onNewSession, onClose,
+  pid = process.pid, instanceId, retries = [], speech = termuxSpeech, port = 8765 }) {
   let listener;
-  const submissions = new Map();
-
-  const server = http.createServer(async (req, res) => {
-    const send = (status, data) => {
-      if (!res.destroyed && !res.writableEnded) {
-        res.writeHead(status, { 'Content-Type': 'application/json; charset=utf-8' });
-        res.end(JSON.stringify(data));
-      }
-    };
-    res.setHeader('Cache-Control', 'no-store');
-    res.setHeader('X-Content-Type-Options', 'nosniff');
-    res.setHeader('Referrer-Policy', 'no-referrer');
-    res.setHeader('Content-Security-Policy', "default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src 'self'; base-uri 'none'; frame-ancestors 'none'; form-action 'none'");
-    try {
-      if (closing) throw fail(503, 'Pi is reloading. Reconnect in a moment.');
-      if (req.headers.host !== new URL(origin).host) throw fail(403, 'Invalid host.');
-      const path = new URL(req.url, origin).pathname;
-      // An app-initiated WebView load may be marked as cross-site. The public
-      // landing page contains no credentials or session data and must load. Never extend this exception to APIs or non-GET requests.
-      const publicLandingPage = req.method === 'GET' && path === '/';
-      if (!publicLandingPage) {
-        if (req.headers.origin && req.headers.origin !== origin) throw fail(403, 'Cross-origin requests are not allowed.');
-        if (req.headers['sec-fetch-site'] === 'cross-site') throw fail(403, 'Cross-site requests are not allowed.');
-      }
-      if (req.method === 'GET' && assets.has(path)) {
-        const [file, type] = assets.get(path);
-        const data = await readFile(`${publicDir}/${file}`);
-        res.writeHead(200, { 'Content-Type': type });
-        res.end(data);
-        return;
-      }
-      if (!path.startsWith('/api/')) throw fail(404, 'Not found.');
-      if (!authenticated(req, token)) throw fail(401, 'Open the app using /voice in Pi to connect securely.');
-      const target = req.headers['x-pi-voice-pid'];
-      if (target !== undefined && path !== '/api/sessions') {
-        if (!/^[1-9]\d{0,9}$/.test(target)) throw fail(400, 'Invalid session.');
-        // Relayed requests are answered only by the Pi they were meant for.
-        if (Number(target) !== pid && req.headers['x-pi-voice-via'] === 'hub') throw fail(410, 'That session is no longer running.');
-        if (Number(target) !== pid) {
-          const peer = peerOrigin && await peerOrigin(Number(target));
-          if (!peer) throw fail(410, 'That session is no longer running.');
-          await forward(req, res, peer, Number(target));
-          return;
-        }
-      }
+  const submissions = new Map(retries.slice(-200).filter((entry) => Array.isArray(entry) && typeof entry[0] === 'string' && entry[0].length <= 200
+    && /^[a-f0-9]{64}$/.test(entry[1]?.digest || '') && entry[1]?.result?.ok === true));
+  const server = await createApiServer({ token, port, fallbackPorts: true, onClose: () => listener?.abort(),
+    async handle({ req, res, path, send }) {
+      if (req.headers['x-pi-voice-pid'] && req.headers['x-pi-voice-pid'] !== String(pid)) throw fail(410, 'That process has ended.');
+      if (req.headers['x-pi-voice-instance'] && req.headers['x-pi-voice-instance'] !== instanceId) throw fail(410, 'That process instance has ended.');
       if (req.method === 'GET' && path === '/api/state') {
         const state = { ...getState(), listening: Boolean(listener) };
-        if (new URL(req.url, origin).searchParams.get('summary') !== '1') send(200, state);
+        if (new URL(req.url, 'http://127.0.0.1').searchParams.get('summary') !== '1') send(200, state);
         else {
           // Lightweight form for the session switcher: no message history.
           const { messages = [], ...summary } = state;
@@ -175,31 +51,9 @@ export async function createVoiceBridge({
       } else if (req.method === 'GET' && path === '/api/activity') {
         if (!getActivity) throw fail(501, 'Live activity is not installed. Restart Pi after updating.');
         send(200, getActivity());
-      } else if (req.method === 'GET' && path === '/api/sessions') {
-        if (!listSessions) throw fail(501, 'Session switching is not installed. Restart Pi after updating.');
-        send(200, { self: pid, sessions: await listSessions(), stopped: listStopped ? await listStopped() : [] });
-      } else if (req.method === 'POST' && path === '/api/session/spawn') {
-        const body = await readJSON(req);
-        if (!body || typeof body.id !== 'string' || !/^[a-zA-Z0-9-]{8,80}$/.test(body.id)) throw fail(400, 'A valid request ID is required.');
-        if (!onSpawn) throw fail(501, 'Parallel sessions are not installed. Restart Pi after updating.');
-        send(202, await onSpawn(body.id));
-      } else if (req.method === 'POST' && (path === '/api/session/restore' || path === '/api/session/forget')) {
-        const body = await readJSON(req);
-        // Only a PID: the record itself is read from Pi's private state.
-        if (!body || !Number.isSafeInteger(body.pid) || body.pid < 1) throw fail(400, 'A valid session is required.');
-        if (path.endsWith('/restore')) {
-          if (typeof body.id !== 'string' || !/^[a-zA-Z0-9-]{8,80}$/.test(body.id)) throw fail(400, 'A valid request ID is required.');
-          if (!onRestore) throw fail(501, 'Restoring sessions is not installed. Restart Pi after updating.');
-          send(202, await onRestore(body.id, body.pid));
-        } else {
-          if (!onForget) throw fail(501, 'Restoring sessions is not installed. Restart Pi after updating.');
-          send(200, await onForget(body.pid));
-        }
       } else if (req.method === 'POST' && path === '/api/session/close') {
         const body = await readJSON(req);
         if (!body || typeof body.sessionId !== 'string' || body.sessionId !== getState().sessionId) throw fail(409, 'The Pi session changed. Review it before closing.');
-        // The page is served by this bridge: closing it would strand the app.
-        if (req.headers['x-pi-voice-via'] !== 'hub') throw fail(409, 'This session hosts the app window and stays open. Quit it in Termux instead.');
         if (!onClose) throw fail(501, 'Closing sessions is not installed. Restart Pi after updating.');
         send(202, onClose());
       } else if (req.method === 'POST' && path === '/api/prompt') {
@@ -281,43 +135,7 @@ export async function createVoiceBridge({
       } else {
         throw fail(404, 'Not found.');
       }
-    } catch (error) {
-      send(error.status || 500, { error: error.status ? error.message : 'Voice bridge error. Check Pi in Termux.' });
-    }
-  });
-  server.requestTimeout = 60000;
-  server.headersTimeout = 10000;
-  server.keepAliveTimeout = 2000;
-  server.maxConnections = 24;
-
-  // Each concurrently running Pi gets its own port/session; never silently steal a bridge.
-  const attempts = port === 0 ? [0] : Array.from({ length: 20 }, (_, i) => port + i);
-  for (const candidate of attempts) {
-    try {
-      await new Promise((resolve, reject) => {
-        const error = (err) => { server.off('listening', ready); reject(err); };
-        const ready = () => { server.off('error', error); resolve(); };
-        server.once('error', error);
-        server.once('listening', ready);
-        server.listen(candidate, '127.0.0.1');
-      });
-      break;
-    } catch (error) {
-      if (error.code !== 'EADDRINUSE' || candidate === attempts.at(-1)) throw error;
-    }
-  }
-  origin = `http://127.0.0.1:${server.address().port}`;
-  return {
-    origin,
-    url: `${origin}/#${token}`,
-    async close() {
-      if (closing) return;
-      closing = true;
-      listener?.abort();
-      await new Promise((resolve) => {
-        server.close(resolve);
-        server.closeAllConnections();
-      });
     },
-  };
+  });
+  return { ...server, retryState: () => [...submissions] };
 }

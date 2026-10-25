@@ -4,7 +4,6 @@ import { mkdtemp, mkdir, readdir, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { alive, removeRecord, stoppedRecords, writeRecord } from '../running.mjs';
-import { launchPlan } from '../native/host.mjs';
 
 async function fixture(t) {
   const directory = await mkdtemp(join(tmpdir(), 'pi-voice-running-'));
@@ -42,22 +41,6 @@ test('a replaced PID is no longer offered for restore once another live Pi recor
   await writeRecord(h.directory, { pid: 7, sessionFile, cwd: h.project, title: 'Resumed' });
   assert.deepEqual(await stoppedRecords(h.directory, { isAlive: (pid) => pid === 7 }), []);
   assert.deepEqual(await readdir(join(h.directory, 'running')), ['7.json']);
-});
-
-test('the native host resumes the latest stopped main session in its folder, else continues in home', async (t) => {
-  const h = await fixture(t);
-  const isAlive = () => false;
-  assert.deepEqual(await launchPlan({ directory: h.directory, cwd: '/home', isAlive }), { cwd: '/home', args: ['-c'], stale: [] });
-  const older = await h.file('older');
-  const newer = await h.file('newer');
-  await writeRecord(h.directory, { pid: 21, sessionFile: older, cwd: h.directory });
-  await new Promise((resolve) => setTimeout(resolve, 5));
-  await writeRecord(h.directory, { pid: 22, sessionFile: newer, cwd: h.project });
-  await writeRecord(h.directory, { pid: 23, sessionFile: await h.file('parallel'), cwd: h.project, spawned: true });
-  const plan = await launchPlan({ directory: h.directory, cwd: '/home', isAlive });
-  assert.deepEqual([plan.cwd, plan.args], [h.project, ['--session', newer]]);
-  assert.deepEqual(plan.stale.map((record) => record.pid), [22, 21], 'Parallel sessions are left for the app to offer');
-  assert.deepEqual((await launchPlan({ directory: h.directory, args: ['--offline'], isAlive })).args, ['--offline'], 'Explicit arguments win');
 });
 
 test('a PID now owned by another app or a newer process does not count as our Pi', async () => {

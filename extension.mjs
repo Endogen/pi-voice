@@ -1,32 +1,16 @@
-import { randomBytes } from 'node:crypto';
-import { access, mkdir, readFile, realpath, writeFile, chmod, unlink } from 'node:fs/promises';
-import { homedir } from 'node:os';
+import { randomBytes, randomUUID } from 'node:crypto';
+import { mkdir, readFile, realpath, chmod, unlink } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 import { execFile } from 'node:child_process';
 import { createVoiceBridge } from './bridge.mjs';
 import { createWakeLock, processIdentity } from './wake-lock.mjs';
 import { imageLimits } from './image-attachments.mjs';
-import { discoverConnections, readEndpoint } from './discovery.mjs';
 import { createActivity } from './activity.mjs';
 import { sendReplyAlert } from './notify.mjs';
-import { alive, markRestoring, removeRecord, stoppedRecord, stoppedRecords, writeRecord } from './running.mjs';
-
-export const stateDir = join(process.env.PI_CODING_AGENT_DIR || join(homedir(), '.pi', 'agent'), 'voice');
-
-async function loadToken() {
-  await mkdir(stateDir, { recursive: true, mode: 0o700 });
-  await chmod(stateDir, 0o700);
-  const file = join(stateDir, 'token');
-  try {
-    await writeFile(file, randomBytes(32).toString('hex'), { flag: 'wx', mode: 0o600 });
-  } catch (error) {
-    if (error.code !== 'EEXIST') throw error;
-  }
-  await chmod(file, 0o600);
-  const token = (await readFile(file, 'utf8')).trim();
-  if (!/^[a-f0-9]{64}$/.test(token)) throw new Error(`Invalid token file: ${file}`);
-  return token;
-}
+import { writeRecord } from './running.mjs';
+import { stateDir, loadToken, protocolVersion, validId } from './config.mjs';
+import { atomicJSON } from './storage.mjs';
+export { stateDir } from './config.mjs';
 
 const readVersion = async (file) => {
   const data = JSON.parse(await readFile(file, 'utf8'));
@@ -79,37 +63,19 @@ export function createTerminal({ detect = detectTerminal, now = Date.now } = {})
   };
 }
 
-const maxSessions = 4;
-// A restore in flight for less than two minutes blocks a second launch.
-const restoringNow = (restoring) => Boolean(restoring && Date.now() - restoring.at < 120000);
-const spawnId = /^[a-zA-Z0-9-]{8,80}$/.test(process.env.PI_VOICE_SPAWN_ID || '') ? process.env.PI_VOICE_SPAWN_ID : undefined;
+const managedId = validId(process.env.PI_VOICE_MANAGED_ID) ? process.env.PI_VOICE_MANAGED_ID : undefined;
 const fail = (status, message) => Object.assign(new Error(message), { status });
-
-// Start another Pi beside this one in the native host's private tmux server.
-// The new Pi publishes its own bridge; the app finds it by its spawn ID.
-export async function launchSession({ id, cwd, args: piArgs = [] }, { socket = 'pi-voice-native', command } = {}) {
-  const tmux = tmuxBinary();
-  const managed = join(homedir(), '.pi', 'agent', 'bin', 'pi');
-  command ||= await access(managed).then(() => [managed], () => [process.execPath, process.argv[1]]);
-  const env = [`PI_VOICE_SPAWN_ID=${id}`, ...(process.env.PI_CODING_AGENT_DIR ? [`PI_CODING_AGENT_DIR=${process.env.PI_CODING_AGENT_DIR}`] : [])];
-  const args = ['-L', socket, 'new-session', '-d', '-s', `pi-voice-${randomBytes(4).toString('hex')}`, '-x', '100', '-y', '36', '-c', cwd, ...env.flatMap((item) => ['-e', item]), ...command, ...piArgs];
-  await new Promise((resolve, reject) => execFile(tmux, args, { timeout: 10000 }, (error, _stdout, stderr) => {
-    if (!error) return resolve();
-    reject(error.code === 'ENOENT'
-      ? fail(501, 'Parallel sessions need tmux. Install it in Termux with: pkg install tmux')
-      : fail(502, `Could not start a parallel session: ${String(stderr || error.message).trim().slice(0, 200)}`));
-  }));
-}
 
 function textOf(message) {
   if (typeof message.content === 'string') return message.content;
   return (message.content || []).filter((part) => part.type === 'text').map((part) => part.text).join('\n');
 }
 
-export default function installVoiceExtension(pi, { wakeLock = createWakeLock({ directory: join(stateDir, 'wake-lock') }), launch = launchSession, getTerminal = createTerminal(), alert = sendReplyAlert } = {}) {
+export default function installVoiceExtension(pi, { wakeLock = createWakeLock({ directory: join(stateDir, 'wake-lock') }), getTerminal = createTerminal(), alert = sendReplyAlert } = {}) {
   let bridge;
-  const spawned = new Set();
-  const spawning = new Map();
+  let instanceId = validId(process.env.PI_VOICE_INSTANCE_ID) ? process.env.PI_VOICE_INSTANCE_ID : randomUUID();
+  let handle = managedId || `external-${process.pid}-${instanceId}`;
+  let retries = [];
   let versions = {};
   const activity = createActivity();
   let bridgeToken;
@@ -121,7 +87,7 @@ export default function installVoiceExtension(pi, { wakeLock = createWakeLock({ 
   let starting;
   let newSessionAction;
   const endpointFile = join(stateDir, 'endpoints', `${process.pid}.json`);
-  // Runtime replacement reloads this module. Carry only the preferred port,
+  // Runtime replacement carries transport identity and accepted request hashes,
   // never a stale Pi context, across /new, /resume and /reload.
   const reconnectFile = join(stateDir, `reconnect-${process.pid}.json`);
 
@@ -129,16 +95,14 @@ export default function installVoiceExtension(pi, { wakeLock = createWakeLock({ 
     // Pi persists a message AFTER emitting message_end. Read at request time so
     // the most recent user/reply is not missing during a long-running tool call.
     return {
-      pid: process.pid,
+      pid: process.pid, handle, instanceId, protocolVersion, role: 'worker', managed: Boolean(managedId),
       sessionId: context.sessionManager.getSessionId(),
       sessionName: context.sessionManager.getSessionName() || 'Pi session',
       title: context.sessionManager.getSessionName() || firstQuestion() || 'New session',
-      spawned: Boolean(spawnId),
       voiceVersion: versions.voice,
       piVersion: versions.pi,
       terminal: getTerminal(),
       activity: activity.current(),
-      spawnId,
       sessionPersistent: Boolean(context.sessionManager.getSessionFile()),
       cwd: context.cwd,
       model: context.model ? `${context.model.provider}/${context.model.id}` : 'No model selected',
@@ -160,28 +124,9 @@ export default function installVoiceExtension(pi, { wakeLock = createWakeLock({ 
     }
   };
 
-  async function spawnSession(id, record) {
-    if (spawned.has(id)) return { ok: true, id };
-    if (spawning.has(id)) return spawning.get(id);
-    // Reserve the ID before discovery yields: concurrent retries share the
-    // acknowledgement (including failures), not just completed launches.
-    const pending = (async () => {
-      const live = await discoverConnections(stateDir);
-      if (live.length >= maxSessions) throw fail(409, `Up to ${maxSessions} sessions can run at once. Close one first.`);
-      // Mark first: a retried or second Restore then reuses this launch.
-      if (record) await markRestoring(stateDir, record, id);
-      await launch(record ? { id, cwd: record.cwd, args: ['--session', record.sessionFile] } : { id, cwd: context.cwd });
-      spawned.add(id);
-      // Keep a recovery record until the replacement publishes its own. The
-      // stopped-record scan then retires duplicates of that live conversation.
-      return { ok: true, id };
-    })();
-    spawning.set(id, pending);
-    try { return await pending; } finally { spawning.delete(id); }
-  }
   const record = () => ({
-    pid: process.pid, sessionId: context.sessionManager.getSessionId(), sessionFile: context.sessionManager.getSessionFile(),
-    cwd: context.cwd, spawned: Boolean(spawnId), title: context.sessionManager.getSessionName() || firstQuestion() || 'New session',
+    pid: process.pid, handle, instanceId, protocolVersion, managed: Boolean(managedId), sessionId: context.sessionManager.getSessionId(), sessionFile: context.sessionManager.getSessionFile(),
+    cwd: context.cwd, title: context.sessionManager.getSessionName() || firstQuestion() || 'New session',
   });
   // A session being closed from the app must not write its record back.
   const saveRecord = async () => {
@@ -207,39 +152,18 @@ export default function installVoiceExtension(pi, { wakeLock = createWakeLock({ 
       const token = await loadToken();
       bridgeToken = token;
       const created = await createVoiceBridge({
-        token, port,
+        token, port, instanceId, retries,
         getState: snapshot,
         getActivity: () => ({ ...activity.snapshot(), terminal: getTerminal() }),
-        listSessions: async () => (await discoverConnections(stateDir)).map(({ url, ...session }) => session),
-        // Conversations whose Pi stopped (phone off, Android killed Termux).
-        listStopped: async () => (await stoppedRecords(stateDir)).map(({ pid, title, cwd, updated, restoring }) => ({ pid, title, cwd, updated, restoring: restoringNow(restoring) })),
-        async onRestore(id, pid) {
-          const found = await stoppedRecord(stateDir, pid);
-          if (!found && !spawned.has(id)) throw fail(410, 'That session can no longer be restored.');
-          // Never start two Pis on one conversation: report the launch in flight.
-          if (found && restoringNow(found.restoring) && found.restoring.id !== id) return { ok: true, id: found.restoring.id };
-          return spawnSession(id, found);
-        },
-        async onForget(pid) {
-          if (await stoppedRecord(stateDir, pid)) await removeRecord(stateDir, pid);
-          return { ok: true };
-        },
-        peerOrigin: async (pid) => {
-          // Endpoint files outlive a killed Pi; a dead PID is not a peer.
-          if (!await alive(pid)) return;
-          const endpoint = await readEndpoint(stateDir, pid);
-          return endpoint?.token === token ? endpoint.origin : undefined;
-        },
-        onSpawn: spawnSession,
         onClose() {
           // Only app-started sessions: never quit a Pi the user runs in a terminal.
-          if (!spawnId) throw fail(409, 'Only sessions started from the app can be closed here. Quit this one in Termux.');
+          if (!managedId) throw fail(409, 'Only sessions started from the app can be closed here. Quit this one in Termux.');
           // Closed on purpose: stop its task (Pi only quits once idle) and
           // never offer it for restoring later.
           closing = true;
           setImmediate(() => {
             try { if (!context.isIdle()) context.abort(); } catch {}
-            void removeRecord(stateDir, process.pid).finally(() => context.shutdown());
+            context.shutdown();
           });
           return { ok: true };
         },
@@ -272,10 +196,10 @@ export default function installVoiceExtension(pi, { wakeLock = createWakeLock({ 
       });
       try {
         await mkdir(join(stateDir, 'endpoints'), { recursive: true, mode: 0o700 });
-        await writeFile(endpointFile, JSON.stringify({
-          pid: process.pid, sessionId: ctx.sessionManager.getSessionId(), cwd: ctx.cwd,
-          origin: created.origin, url: created.url, token,
-        }), { mode: 0o600 });
+        await atomicJSON(endpointFile, {
+          pid: process.pid, handle, instanceId, protocolVersion, managed: Boolean(managedId), sessionId: ctx.sessionManager.getSessionId(), cwd: ctx.cwd,
+          origin: created.origin, token, role: 'worker',
+        });
         await chmod(endpointFile, 0o600);
       } catch (error) {
         await created.close();
@@ -292,10 +216,11 @@ export default function installVoiceExtension(pi, { wakeLock = createWakeLock({ 
   async function stop(event) {
     if (starting) { try { await starting; } catch {} }
     const old = bridge;
+    retries = old?.retryState() || retries;
     bridge = undefined;
     if (old && ['new', 'resume', 'fork', 'reload'].includes(event?.reason)) {
       // The replacement runtime keeps the port and the stay-awake state.
-      await writeFile(reconnectFile, JSON.stringify({ port: Number(new URL(old.origin).port), awake: wakeLock.status().active }), { mode: 0o600 })
+      await atomicJSON(reconnectFile, { port: Number(new URL(old.origin).port), awake: wakeLock.status().active, instanceId, retries: old.retryState() })
         .catch((error) => context?.ui.notify(`Pi Voice reconnect: ${error.message}`, 'warning'));
     } else await unlink(reconnectFile).catch(() => {});
     await old?.close();
@@ -309,6 +234,8 @@ export default function installVoiceExtension(pi, { wakeLock = createWakeLock({ 
     try {
       const reconnect = event.reason === 'startup' ? undefined : await readFile(reconnectFile, 'utf8').then(JSON.parse).catch(() => undefined);
       await unlink(reconnectFile).catch(() => {});
+      if (validId(reconnect?.instanceId)) { instanceId = reconnect.instanceId; handle = managedId || `external-${process.pid}-${instanceId}`; }
+      retries = Array.isArray(reconnect?.retries) ? reconnect.retries : [];
       const port = Number.isInteger(reconnect?.port) && reconnect.port > 0 && reconnect.port < 65536 ? reconnect.port : undefined;
       await start(ctx, port);
       if (reconnect?.awake === true) await wakeLock.setEnabled(true).catch(() => {});
@@ -333,7 +260,7 @@ export default function installVoiceExtension(pi, { wakeLock = createWakeLock({ 
     if (!bridge || !answer || answer.id === answerBefore) return;
     answerBefore = answer.id;
     try {
-      alert({ token: bridgeToken, pid: process.pid, text: textOf(answer.message),
+      alert({ token: bridgeToken, pid: process.pid, handle, text: textOf(answer.message),
         title: ctx.sessionManager.getSessionName() || firstQuestion() || 'Pi replied' });
     } catch { /* Alerts are best effort. */ }
   };
