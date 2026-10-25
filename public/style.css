@@ -44,6 +44,8 @@ button:not(:disabled):active { transform: scale(.96); }
 .round-button { width: 44px; height: 44px; border-radius: 50%; }
 .wide-button { width: 100%; min-height: 48px; margin-top: 12px; border: 1px dashed var(--border-strong); border-radius: var(--radius); color: var(--fg); }
 .wide-button:not(:disabled):hover { background: var(--surface-2); }
+.wide-button.danger { border: 1px solid rgb(248 113 113 / .4); color: var(--danger); }
+.wide-button.danger:not(:disabled):hover { background: var(--danger-soft); }
 
 /* App bar */
 .app-bar { display: flex; align-items: center; gap: 2px; min-height: 52px; }
@@ -124,6 +126,7 @@ dialog::backdrop { background: rgb(3 7 18 / .66); }
 .sheet-header h2 { font-size: 1.05rem; font-weight: 650; }
 .sheet-body { padding: 4px 20px 20px; min-height: 0; overflow: auto; overscroll-behavior: contain; }
 .hint { color: var(--muted); font-size: .82rem; line-height: 1.5; margin: 8px 0; }
+.sheet-section { margin-top: 20px; padding-top: 12px; border-top: 1px solid var(--border); }
 .muted { color: var(--muted); }
 
 /* Session switcher */

@@ -647,9 +647,11 @@ globalThis.PiVoicePlayback = (() => {
       }));
       $('stopped-section').hidden = !sessionState.stopped.length;
       $('stopped-list').replaceChildren(...sessionState.stopped.map(stoppedRow));
-      $('sessions-hint').textContent = sessionState.sessionsSupported
-        ? 'New sessions always run alongside this one, even while Pi is working. Switch back any time. Up to 4 sessions can run at once.'
-        : 'Restart Pi once to run and switch between parallel sessions.';
+      $('sessions-hint').textContent = !sessionState.sessionsSupported
+        ? 'Restart Pi once to run and switch between parallel sessions.'
+        : sessionState.sessions.length
+          ? 'New sessions always run alongside this one, even while Pi is working. Switch back any time. Up to 4 sessions can run at once.'
+          : `No session is running. Start a new one${sessionState.stopped.length ? ' or restore one stopped earlier' : ''} to talk to Pi.`;
     }
     async function pollSessions() {
       // The host's session/restore UI must work even when the notified worker is gone.
@@ -982,7 +984,7 @@ function controls() {
   $('thinking').classList.toggle('waiting', Boolean(state?.activity?.prompt) && !sending);
   $('thinking').classList.toggle('clickable', true);
   $('open-activity').hidden = !sessionReady();
-  $('stop-host').hidden = !connected || sessionState.sessions.some((item) => item.managed);
+  $('stop-host-section').hidden = !connected || sessionState.sessions.some((item) => item.managed);
   $('latest-answer').setAttribute('aria-busy', String(Boolean(working)));
   $('abort').hidden = !working;
   $('abort').disabled = !working || sending;

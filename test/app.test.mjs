@@ -1699,7 +1699,9 @@ test('empty host stays connected, permits New, and blocks prompt and speech with
   assert.equal(h.el('draft').value, 'retain me');
   assert.match(h.el('latest-answer').textContent, /Start a new session/);
   assert.equal(h.el('reconnect').hidden, true);
-  assert.equal(h.el('stop-host').hidden, false);
+  assert.equal(h.el('stop-host-section').hidden, false);
+  h.el('open-sessions').click();
+  assert.match(h.el('sessions-hint').textContent, /No session is running/);
   await vm.runInContext('startNewSession()', h.context);
   assert.equal(h.requests.filter((r) => r.path === '/api/session/spawn').length, 1);
 });

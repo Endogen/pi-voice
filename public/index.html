@@ -71,8 +71,11 @@
       <div id="session-list" class="session-list" role="list"></div>
       <div id="stopped-section" hidden><h3 class="list-heading">Stopped earlier</h3><div id="stopped-list" class="session-list" role="list"></div></div>
       <button id="sessions-new" class="wide-button"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg>New session</button>
-      <button id="stop-host" class="quiet" hidden>Stop Pi Voice service</button>
       <p id="sessions-hint" class="hint">A new session started while Pi is working runs alongside it. Up to 4 sessions can run at once; each stays saved in Pi.</p>
+      <div id="stop-host-section" class="sheet-section" hidden>
+        <p class="hint">Pi Voice keeps running in Termux while no session is open, so the next one starts quickly. Stop it to free resources; Reconnect starts it again.</p>
+        <button id="stop-host" class="wide-button danger">Stop Pi Voice service</button>
+      </div>
     </div>
   </dialog>
 

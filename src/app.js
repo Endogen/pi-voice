@@ -256,7 +256,7 @@ function controls() {
   $('thinking').classList.toggle('waiting', Boolean(state?.activity?.prompt) && !sending);
   $('thinking').classList.toggle('clickable', true);
   $('open-activity').hidden = !sessionReady();
-  $('stop-host').hidden = !connected || sessionState.sessions.some((item) => item.managed);
+  $('stop-host-section').hidden = !connected || sessionState.sessions.some((item) => item.managed);
   $('latest-answer').setAttribute('aria-busy', String(Boolean(working)));
   $('abort').hidden = !working;
   $('abort').disabled = !working || sending;
