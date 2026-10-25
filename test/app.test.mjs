@@ -24,7 +24,7 @@ class Element {
   click() { this.clicked = (this.clicked || 0) + 1; return this.listeners.click?.(); }
   scrollIntoView() { throw new Error('Conversation updates must not force-scroll.'); }
 }
-async function setup({ auto = false, speech = true, awake = true, confirmed = true, native = false, playback = false, nativePlayback = true, nativeTerminal = true, nativeReconnect = true, nativeAlerts = true, alertStatus = 'on', initialState } = {}) {
+async function setup({ auto = false, autoSend = false, speech = true, awake = true, confirmed = true, native = false, playback = false, nativePlayback = true, nativeTerminal = true, nativeReconnect = true, nativeAlerts = true, alertStatus = 'on', initialState } = {}) {
   const elements = new Map();
   const prompts = [];
   const instances = [];
@@ -50,7 +50,7 @@ async function setup({ auto = false, speech = true, awake = true, confirmed = tr
   const utterances = [];
   class Utterance { constructor(text) { this.text = text; } }
   const synthesis = { cancellations: 0, speak: (utterance) => utterances.push(utterance), cancel() { this.cancellations++; } };
-  const values = new Map([['pi-voice-autosend', String(auto)], ['pi-voice-awake', String(awake)]]);
+  const values = new Map([['pi-voice-autosend', String(auto)], ['pi-voice-auto-send', String(autoSend)], ['pi-voice-awake', String(awake)]]);
   const state = { handle: 'session-100', instanceId: 'instance-100', status: 'ready', capabilities: { close: true }, sessionId: 'session-one', sessionName: 'Test', cwd: '/project', model: 'test/test', modelSelection: { provider: 'test', id: 'test' }, modelSwitchingSupported: true, modelSwitching: false, busy: false, messages: [], imageAttachments: true, modelSupportsImages: true,
     modelName: 'Cloud model', thinkingSupported: true, thinkingLevel: 'medium', thinkingLevels: ['off', 'minimal', 'low', 'medium', 'high'], compactSupported: true };
   const imageProcessing = {
@@ -1737,6 +1737,102 @@ test('native preference migration imports allowlisted settings without replacing
   assert.equal(h.el('sound').checked, false);
   assert.equal(h.values.get('pi-voice-token'), 'test-token');
   assert.equal(vm.runInContext('sessionState.targetHandle', h.context), 'session-100');
+});
+
+// Auto-send waits 2 s; skip the wait instead of sleeping through it.
+async function autoSendDue(h) {
+  vm.runInContext('if (autoSend) autoSend.deadline = 0', h.context);
+  await new Promise((resolve) => setTimeout(resolve, 300)); await flush();
+}
+function speak(h, text) {
+  h.el('microphone').listeners.click();
+  const engine = h.instances.at(-1);
+  engine.onresult(result(text));
+  engine.onend();
+}
+
+test('auto-send is off by default and, when on, sends the transcript after a visible countdown', async () => {
+  const off = await setup();
+  assert.equal(off.el('auto-send').checked, false);
+  const h = await setup({ autoSend: true });
+  assert.equal(h.el('auto-send').checked, true);
+  h.el('microphone').listeners.click();
+  assert.equal(h.el('listening').textContent, 'Listening… Sends when you pause');
+  h.instances[0].onresult(result('run the tests'));
+  h.instances[0].onend();
+  await flush();
+  assert.deepEqual(h.prompts, [], 'Never sent immediately');
+  assert.match(h.el('notice').textContent, /Sending in 2 s/);
+  assert.equal(h.el('auto-send-edit').hidden, false);
+  await autoSendDue(h);
+  assert.deepEqual(h.prompts.map((prompt) => [prompt.text, prompt.sessionId]), [['run the tests', 'session-one']]);
+  assert.equal(h.el('auto-send-edit').hidden, true);
+  assert.equal(h.el('draft').value, '');
+});
+
+test('Edit, typing, tapping the draft, attaching, leaving the app or switching sessions cancel auto-send', async () => {
+  const cancels = {
+    edit: (h) => h.el('auto-send-edit').click(),
+    typing: (h) => { h.el('draft').value += ' and lint'; h.el('draft').listeners.input(); },
+    tap: (h) => h.el('draft').listeners.pointerdown(),
+    attach: (h) => h.el('attach').click(),
+    hidden: (h) => { h.document.hidden = true; h.document.listeners.visibilitychange(); },
+    switch: (h) => vm.runInContext("selectTarget('session-200')", h.context),
+    setting: (h) => { h.el('auto-send').checked = false; h.el('auto-send').listeners.change(); },
+  };
+  for (const [name, cancel] of Object.entries(cancels)) {
+    const h = await setup({ autoSend: true });
+    speak(h, 'run the tests'); await flush();
+    cancel(h);
+    await autoSendDue(h);
+    assert.deepEqual(h.prompts, [], name);
+    assert.equal(h.el('auto-send-edit').hidden, true, name);
+    if (name !== 'switch') assert.match(h.el('draft').value, /^run the tests/, `${name} keeps the transcript`);
+    if (!['switch'].includes(name)) assert.match(h.el('notice').textContent, /Auto-send cancelled/, name);
+  }
+  const sent = await setup({ autoSend: true });
+  speak(sent, 'send it now'); await flush();
+  sent.el('send').click(); await flush(); await autoSendDue(sent);
+  assert.equal(sent.prompts.length, 1, 'Tapping Send during the countdown sends once');
+});
+
+test('auto-send never sends images, a changed draft or into another conversation', async () => {
+  const images = await setup({ autoSend: true });
+  await attach(images);
+  speak(images, 'Explain this photo'); await flush(); await autoSendDue(images);
+  assert.deepEqual(images.prompts, []);
+  assert.match(images.el('notice').textContent, /Transcript and images ready/);
+  const moved = await setup({ autoSend: true });
+  speak(moved, 'for the first conversation'); await flush();
+  Object.assign(moved.state, { sessionId: 'session-two' });
+  await vm.runInContext('poll()', moved.context); await autoSendDue(moved);
+  assert.deepEqual(moved.prompts, []);
+  assert.match(moved.el('notice').textContent, /Pi switched sessions|Auto-send cancelled/);
+});
+
+test('auto-send waits for a compaction or model change instead of dropping the message', async () => {
+  const h = await setup({ autoSend: true });
+  speak(h, 'continue after compacting'); await flush();
+  h.state.compaction = { status: 'running' };
+  await vm.runInContext('poll()', h.context);
+  await autoSendDue(h);
+  assert.deepEqual(h.prompts, []);
+  assert.match(h.el('notice').textContent, /Sending when Pi finishes compacting/);
+  assert.equal(h.el('auto-send-edit').hidden, false, 'Still cancellable while waiting');
+  h.state.compaction = { status: 'done', ended: 1 };
+  await vm.runInContext('poll()', h.context);
+  await new Promise((resolve) => setTimeout(resolve, 600)); await flush();
+  assert.deepEqual(h.prompts.map((prompt) => prompt.text), ['continue after compacting']);
+});
+
+test('the auto-send setting is saved under its own key and survives the native preference migration', async () => {
+  const h = await setup({ auto: true });
+  assert.equal(h.el('auto-send').checked, false, 'The pre-3.0 autosend preference stays ignored');
+  h.el('auto-send').checked = true; h.el('auto-send').listeners.change();
+  assert.equal(h.values.get('pi-voice-auto-send'), 'true');
+  const restored = await setup();
+  restored.context.window.__piVoiceRestorePreferences({ 'auto-send': 'true' });
+  assert.equal(restored.el('auto-send').checked, true);
 });
 
 async function openModels(h) {

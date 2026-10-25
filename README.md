@@ -20,7 +20,7 @@ Pi Voice gives that agent a real app: **tap the icon → speak → review the tr
 - **A whole agent on the device:** Pi works in Termux with a real shell. It edits files, runs tests, installs packages and uses git, the GitHub CLI and SSH on your phone.
 - **Your model, your choice:** use any provider Pi supports, or a local model served by llama.cpp or Ollama on the phone. With a local model and Android's offline speech, it can run completely offline.
 - **No server in between:** the app, its host and Pi talk only over `127.0.0.1`, behind a private token.
-- **Push-to-talk input** with Android speech recognition. Review and edit the transcript, then tap Send.
+- **Push-to-talk input** with Android speech recognition. Review and edit the transcript, then tap Send, or turn on auto-send for hands-free use.
 - **Focused chat view:** your latest question and Pi's reply with safe Markdown (code, tables, lists). Older messages are in History.
 - **Live activity:** see the tool Pi is running, its output and the reply being written, and jump to Pi's terminal in Termux.
 - **Parallel sessions:** start a new conversation while Pi is still working, and switch between running sessions.
@@ -90,7 +90,7 @@ Return/Enter adds a new line, including on the Android keyboard. Keyboard shortc
 
 - **Top bar:** the session's title, a status dot (green ready, amber working, red disconnected) and its folder. Tap it to open **Sessions**. The icons on the right are **New session**, **History** and **Settings**.
 - **Middle:** your latest question and Pi's reply. Long replies scroll inside this area; History shows the recent conversation (up to 40 messages), newest first.
-- **Bottom:** the composer with the paperclip, microphone and send button. Short status messages appear above it and fade; errors stay until your next action.
+- **Bottom:** the composer with the paperclip, the model chip, the microphone and the send button. Short status messages appear above it and fade; errors stay until your next action.
 
 The chat shows complete messages, not the reply token by token. To follow a reply while it is being written, open Activity. **Pull down** on the conversation to refresh it right away; it also updates by itself every 1.5 seconds.
 
@@ -170,7 +170,8 @@ Notifications come from the Pi extension in Termux, which tells the app when a r
 
 ### Settings
 
-- **Voice input:** speech engine (Android speech, or Termux:API as a fallback) and speech language.
+- **Voice input:** auto-send, the speech engine (Android speech, or Termux:API as a fallback) and the speech language.
+  - **Send automatically after speech** is off by default. When on, the transcript is sent 2 seconds after you stop speaking, with a countdown above the composer. Tap **Edit**, type, tap into the draft, attach an image or leave the app to cancel; the transcript stays in the draft. Messages with images always wait for Send, nothing is sent to a session other than the one you spoke to, and during a model change or compaction it waits until Pi is ready.
 - **Voice output:** the read-aloud language, for example `en-US` or `de-DE`. Install matching voices in Android's text-to-speech settings.
 - **Replies & feedback:** reply notifications, the reply chime and haptic feedback.
 - **Keep Pi available:** the Termux wake lock (see below).
@@ -220,7 +221,7 @@ The worker adapter starts automatically whenever Pi starts in a terminal. These 
 - Open in Termux can only name Pi Voice's own tmux sessions. The app validates the name and runs a fixed command without a shell.
 - The Activity sheet shows tool output, which can include file contents or secrets printed by commands. It stays on the phone, behind the token, and only in memory.
 - Your messages and images go to your configured model provider through Pi and are saved in Pi's session history, like typed prompts. Speech recognition and text-to-speech use Android's selected services, which **may process audio or text online**. Pi Voice stores no audio.
-- Messages you send can trigger real commands and file changes. Review-before-send is the safer default.
+- Messages you send can trigger real commands and file changes. Review-before-send is the safer default; auto-send is opt-in and always cancellable during its countdown.
 
 To rotate the token, quit all Pi instances and stop the Pi Voice service, then delete `~/.pi/agent/voice/token` and open the app again.
 

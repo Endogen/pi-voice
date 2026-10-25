@@ -26,6 +26,10 @@ let wakeSyncing = false;
 let attachments = [];
 let preparingImages = false;
 let attachmentButtons = [];
+// A transcript waiting to be sent automatically. It is tied to one conversation
+// and to the exact text; editing, switching or leaving the app cancels it.
+let autoSend;
+const autoSendDelay = 2000;
 let readingSourceKey;
 // The independent host owns the connection; every conversation has an explicit handle.
 let pollCount = 0;
@@ -49,7 +53,7 @@ const sessionsController = globalThis.PiVoiceSessions.create({
   resetTarget: () => {
     pendingMessage = undefined; optimisticQuestion = undefined; lastFocus = ''; lastMessages = '';
     activityData = undefined; activitySupported = true; expandedSteps.clear();
-    cancelRecording(); playback.stop();
+    cancelRecording(); cancelAutoSend(); playback.stop();
   },
 });
 const { state: sessionState, startNewSession, rememberSelection, finishNotification, openNotificationWhenReady,
@@ -82,6 +86,9 @@ function setEngine(value) {
 }
 setEngine(storage.get('engine') || (SpeechRecognition ? 'browser' : 'termux'));
 $('awake').checked = storage.get('awake') !== 'false';
+// A new key: the pre-3.0 "autosend" preference stays ignored rather than
+// silently switching sending without review back on.
+$('auto-send').checked = storage.get('auto-send') === 'true';
 $('read-language').value = storage.get('read-language') || navigator.language || 'en-US';
 for (const id of ['notify', 'sound', 'haptics']) $(id).checked = storage.get(id) !== 'false';
 // Light feedback through Android's haptics (no permission; follows the system
@@ -147,7 +154,7 @@ window.__piVoiceAlerts = alertHint;
 // Native preferences survive the one-time move from a worker origin to the
 // independent host. The allowlist excludes tokens and session selection.
 window.__piVoiceRestorePreferences = (values) => {
-  const booleans = ['awake', 'notify', 'sound', 'haptics'];
+  const booleans = ['awake', 'notify', 'sound', 'haptics', 'auto-send'];
   const strings = ['language', 'engine', 'read-language'];
   for (const key of [...booleans, ...strings, 'notify-asked', 'terminal-warned']) {
     const value = values?.[key];
@@ -164,6 +171,41 @@ $('read-language').disabled = !playback.supported;
 setText('read-support', playback.supported ? 'Tap the speaker beside Pi’s completed reply to listen. Replies never play automatically.' : playback.needsUpgrade ? 'Update the Pi Voice app to enable Read aloud.' : 'Read aloud needs the Pi Voice app.');
 function speechHint() {
   return attachments.length ? 'Review images, then send' : 'Review, then send';
+}
+function cancelAutoSend(message) {
+  if (!autoSend) return;
+  clearTimeout(autoSend.timer);
+  autoSend = undefined;
+  $('auto-send-edit').hidden = true;
+  if (message) notice(message);
+}
+function scheduleAutoSend(text) {
+  cancelAutoSend();
+  const entry = { text, sessionId: state.sessionId, handle: state.handle, deadline: Date.now() + autoSendDelay, shown: '' };
+  autoSend = entry;
+  $('auto-send-edit').hidden = false;
+  const show = (text) => { if (entry.shown !== text) { entry.shown = text; notice(text); } };
+  const tick = () => {
+    if (autoSend !== entry) return;
+    // Only ever this conversation and this unedited transcript, never images.
+    if (state?.sessionId !== entry.sessionId || state?.handle !== entry.handle || $('draft').value.trim() !== entry.text || attachments.length) {
+      cancelAutoSend('Auto-send cancelled. Review the draft, then tap Send.');
+      return;
+    }
+    const left = entry.deadline - Date.now();
+    if (left > 0) { show(`Sending in ${Math.ceil(left / 1000)} s… Tap Edit to review first.`); entry.timer = setTimeout(tick, Math.min(250, left)); return; }
+    if (!sessionReady()) { cancelAutoSend('Not sent: Pi is not connected. Your transcript is in the draft.'); return; }
+    // A model change or compaction is short: wait for it rather than drop the message.
+    if (modelChanging() || sessionOptions.busy || sessionStarting() || sending || preparingImages) {
+      show(`Sending when Pi finishes ${sessionOptions.busy ? 'compacting' : modelChanging() ? 'changing models' : 'the current step'}… Tap Edit to review first.`);
+      entry.timer = setTimeout(tick, 500);
+      return;
+    }
+    autoSend = undefined;
+    $('auto-send-edit').hidden = true;
+    void send();
+  };
+  tick();
 }
 
 function notice(text, error = false) {
@@ -704,6 +746,7 @@ const poll = globalThis.PiVoicePolling.create({
       pendingMessage = undefined;
       // Do not automatically send a recording into a newly selected session.
       cancelRecording();
+      cancelAutoSend();
       notice('Pi switched sessions. Review the connected session before sending.', true);
     } else if (!wasConnected) {
       notice('Connected. Ready when you are.');
@@ -745,6 +788,7 @@ const poll = globalThis.PiVoicePolling.create({
   },
 });
 async function send() {
+  cancelAutoSend();
   const text = $('draft').value.trim();
   if ((!text && !attachments.length) || !sessionReady() || sending || listening || preparingImages || sessionStarting() || modelChanging() || sessionOptions.busy) return;
   if (attachments.length && imageSupportError()) { notice(imageSupportError(), true); return; }
@@ -792,6 +836,7 @@ async function startSpeech() {
     return;
   }
   if (!connected || sending || preparingImages || sessionStarting() || modelChanging()) return;
+  cancelAutoSend();
   playback.stop(); // Never record Pi's own spoken answer into a new prompt.
   const base = $('draft').value;
   cancelSpeech = false;
@@ -801,7 +846,7 @@ async function startSpeech() {
   let finished = false;
   listening = true;
   haptic('toggle');
-  $('listening').textContent = 'Listening… Pause when done';
+  $('listening').textContent = $('auto-send').checked && !attachments.length ? 'Listening… Sends when you pause' : 'Listening… Pause when done';
   controls();
   const finish = async () => {
     if (finished) return;
@@ -816,7 +861,8 @@ async function startSpeech() {
     } else if (!error && transcript.trim()) {
       $('draft').value = appendSpeech(base, transcript);
       controls();
-      notice(attachments.length ? 'Transcript and images ready. Review them, then tap Send.' : 'Transcript ready. Review it, then tap Send to Pi.');
+      if ($('auto-send').checked && !attachments.length && !document.hidden) scheduleAutoSend($('draft').value.trim());
+      else notice(attachments.length ? 'Transcript and images ready. Review them, then tap Send.' : 'Transcript ready. Review it, then tap Send to Pi.');
     } else if (!error) notice('No speech detected. Try again.', true);
   };
   if (engine === 'browser') {
@@ -873,6 +919,7 @@ async function startSpeech() {
 }
 $('attach').addEventListener('click', () => {
   if (!connected || sending || listening || preparingImages || sessionStarting() || modelChanging()) return;
+  cancelAutoSend('Auto-send cancelled. Images always wait for Send.');
   const unsupported = imageSupportError();
   if (unsupported) notice(unsupported, true);
   else $('image-input').click();
@@ -895,8 +942,11 @@ $('read-language').addEventListener('change', () => {
   storage.set('read-language', $('read-language').value.trim());
 });
 $('send').addEventListener('click', () => { void send(); });
-$('draft').addEventListener('input', controls);
-$('clear').addEventListener('click', () => { $('draft').value = ''; setAttachments([]); controls(); });
+$('draft').addEventListener('input', () => { cancelAutoSend('Auto-send cancelled. Tap Send when ready.'); controls(); });
+// Tapping into the draft means the user wants to edit it first.
+$('draft').addEventListener('pointerdown', () => cancelAutoSend('Auto-send cancelled. Tap Send when ready.'));
+$('auto-send-edit').addEventListener('click', () => { cancelAutoSend('Auto-send cancelled. Tap Send when ready.'); $('draft').focus?.(); });
+$('clear').addEventListener('click', () => { cancelAutoSend(); $('draft').value = ''; setAttachments([]); controls(); });
 $('abort').addEventListener('click', async () => {
   const sessionId = state?.sessionId;
   if (!connected || !sessionId) return;
@@ -936,6 +986,10 @@ for (const value of ['browser', 'termux']) {
     controls();
   });
 }
+$('auto-send').addEventListener('change', () => {
+  storage.set('auto-send', String($('auto-send').checked));
+  if (!$('auto-send').checked) cancelAutoSend('Auto-send cancelled. Tap Send when ready.');
+});
 $('awake').addEventListener('change', () => { storage.set('awake', String($('awake').checked)); void syncWakeLock(); });
 for (const name of ['sessions', 'activity', 'history', 'settings', 'model']) {
   const dialog = $(`${name}-dialog`);
@@ -953,7 +1007,7 @@ document.addEventListener('visibilitychange', () => {
   // Coming back to a stopped Pi: the native app restarts it once by itself.
   if (!document.hidden) { reconnectOnFailure = true; alertHint(); void poll(); }
   // Never auto-send a recording that was interrupted by switching apps.
-  else { cancelRecording(); playback.stop(); }
+  else { cancelRecording(); cancelAutoSend('Auto-send cancelled because you left the app. Tap Send when ready.'); playback.stop(); }
 });
 window.addEventListener?.('pagehide', () => playback.stop());
 // Pull down on the conversation (scrolled to the top) to re-sync with Pi, or

@@ -8,7 +8,7 @@ import org.json.JSONObject;
 /** Private app preferences shared by the Activity and the reply receiver. */
 final class Prefs {
     static final String TOKEN = "bridgeToken", NOTIFY = "notify", SOUND = "sound", OPEN_KEY = "openKey";
-    static final String[] UI_KEYS = { "awake", "language", "engine", "read-language", "notify", "sound", "haptics", "notify-asked", "terminal-warned" };
+    static final String[] UI_KEYS = { "awake", "language", "engine", "read-language", "notify", "sound", "haptics", "notify-asked", "terminal-warned", "auto-send" };
     static boolean uiKey(String key) {
         for (String allowed : UI_KEYS) if (allowed.equals(key)) return true;
         return false;

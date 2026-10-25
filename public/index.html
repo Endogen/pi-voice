@@ -47,7 +47,7 @@
     </section>
 
     <section class="composer" aria-label="Write, speak or attach images to your next message">
-      <div class="notice-row"><p id="notice" role="status" aria-live="polite" tabindex="0">Connecting to Pi…</p><button id="reconnect" class="pill-button" hidden>Reconnect</button></div>
+      <div class="notice-row"><p id="notice" role="status" aria-live="polite" tabindex="0">Connecting to Pi…</p><button id="reconnect" class="pill-button" hidden>Reconnect</button><button id="auto-send-edit" class="pill-button" hidden>Edit</button></div>
       <div id="prompt-box" class="prompt-box">
         <div id="attachments" class="attachments" aria-label="Selected images" hidden></div>
         <p id="image-hint" class="image-hint" hidden>Images send only when you tap Send. Remove any private details first.</p>
@@ -125,7 +125,8 @@
     <div class="sheet-body settings-body">
       <section class="settings-section" aria-label="Speech settings">
         <h3>Voice input</h3>
-        <p class="hint">Off by default, so you can review the transcript first.</p>
+        <label class="switch"><span>Send automatically after speech</span><input type="checkbox" id="auto-send" role="switch"></label>
+        <p class="hint">Off by default, so you can review the transcript first. When on, the transcript is sent 2 seconds after you stop speaking unless you tap Edit or change it. Images always wait for Send, and nothing is sent to a different session.</p>
         <span id="engine-label" class="field-label">Speech engine</span>
         <div id="engine" class="segmented" role="radiogroup" aria-labelledby="engine-label"><button id="engine-browser" type="button" role="radio" aria-checked="true">Android speech</button><button id="engine-termux" type="button" role="radio" aria-checked="false">Termux:API</button></div>
         <label id="speech-language-label" for="language">Speech language</label>
