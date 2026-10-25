@@ -3,15 +3,15 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Pi Voice — talk to your coding agent from your phone</title>
-  <meta name="description" content="Pi Voice is an Android app for the Pi coding agent running in Termux. Speak a task, review it, send it — and get notified when Pi is done. Local, private, open source.">
+  <title>Pi Voice — a coding agent that runs on your phone</title>
+  <meta name="description" content="Pi Voice is the Android app for the Pi coding agent running on your phone in Termux: it codes, runs commands and uses git and GitHub on the device itself — with a local model, entirely offline. Talk to it by voice.">
   <meta name="theme-color" content="#0b1020">
   <link rel="icon" href="assets/favicon-16.png" type="image/png" sizes="16x16">
   <link rel="icon" href="assets/favicon-32.png" type="image/png" sizes="32x32">
   <link rel="icon" href="assets/favicon-192.png" type="image/png" sizes="192x192">
   <meta property="og:type" content="website">
-  <meta property="og:title" content="Pi Voice — talk to your coding agent from your phone">
-  <meta property="og:description" content="Speak a task, put your phone away, get notified when Pi is done. An Android app for the Pi coding agent in Termux.">
+  <meta property="og:title" content="Pi Voice — a coding agent that runs on your phone">
+  <meta property="og:description" content="The Pi coding agent, running on your Android phone: real shell, real files, git and GitHub — and a local model if you want. Talk to it by voice.">
   <meta property="og:image" content="https://endogen.github.io/pi-voice/assets/og.png">
   <meta property="og:url" content="https://endogen.github.io/pi-voice/">
   <meta name="twitter:card" content="summary_large_image">
@@ -28,6 +28,7 @@
     <div class="wrap nav-inner">
       <a class="brand" href="#top" aria-label="Pi Voice home"><img class="brand-mark" src="assets/favicon-192.png" width="32" height="32" alt=""><span>Pi Voice</span></a>
       <nav aria-label="Sections">
+        <a href="#on-device">On device</a>
         <a href="#how">How it works</a>
         <a href="#features">Features</a>
         <a href="#private">Privacy</a>
@@ -48,9 +49,9 @@
       <div class="glow glow-b" aria-hidden="true"></div>
       <div class="wrap hero-grid">
         <div class="hero-copy">
-          <a class="badge reveal" href="https://github.com/Endogen/pi-voice/blob/main/CHANGELOG.md"><span class="badge-dot" aria-hidden="true"></span>New in 3.0 — sessions that run on their own<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12h14M13 6l6 6-6 6"/></svg></a>
-          <h1 class="reveal">Talk to your coding agent. <em>Then put your phone away.</em></h1>
-          <p class="lede reveal">Pi Voice is an Android app for the <a href="https://github.com/earendil-works/pi">Pi coding agent</a> running in Termux. Speak a task, check the transcript, send it — and get a nudge when Pi is done. No cloud, no server, no account.</p>
+          <a class="badge reveal" href="#on-device"><span class="badge-dot" aria-hidden="true"></span>On-device · works with local models<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12h14M13 6l6 6-6 6"/></svg></a>
+          <h1 class="reveal">Your coding agent, <em>running on your phone.</em></h1>
+          <p class="lede reveal">Pi Voice is the Android app for the <a href="https://github.com/earendil-works/pi">Pi coding agent</a>, which runs right on your device in Termux — your files, your shell, git and GitHub. No remote server in between, and with a local model nothing has to leave the phone. Just say what you want.</p>
           <div class="cta-row reveal">
             <a class="button button-primary" href="https://github.com/Endogen/pi-voice/releases/latest/download/pi-voice.apk">
               <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3v12M7 10l5 5 5-5M5 21h14"/></svg>
@@ -59,9 +60,9 @@
             <a class="button button-ghost" href="https://github.com/Endogen/pi-voice">View on GitHub</a>
           </div>
           <ul class="trust reveal" aria-label="At a glance">
+            <li>Runs on your device</li>
+            <li>Works with local models</li>
             <li>Free and open source</li>
-            <li>Works with your existing Pi</li>
-            <li>Stays on your phone</li>
           </ul>
         </div>
 
@@ -71,12 +72,50 @@
           </div>
           <div class="float notification" aria-hidden="true">
             <span class="note-icon"><svg viewBox="0 0 24 24"><rect x="9" y="2.5" width="6" height="12" rx="3"/><path d="M5 10.5v1a7 7 0 0 0 14 0v-1M12 18.5v3"/></svg></span>
-            <span class="note-body"><span class="note-meta">Pi Voice · now</span><strong>Fix the failing version test</strong><span>All tests pass. The check now reads the version from package.json, so it can't drift again.</span></span>
+            <span class="note-body"><span class="note-meta">Pi Voice · now</span><strong>Fix the login redirect</strong><span>All tests pass. I pushed the branch fix-login and opened pull request #12 on GitHub.</span></span>
           </div>
           <div class="float listening" aria-hidden="true">
             <span class="rec" ></span>Listening<span class="wave"><i></i><i></i><i></i><i></i><i></i><i></i><i></i></span>
           </div>
         </div>
+      </div>
+    </section>
+
+    <!-- On device -->
+    <section class="ondevice" id="on-device">
+      <div class="wrap ondevice-grid">
+        <div class="ondevice-copy">
+          <p class="eyebrow">On device</p>
+          <h2>Not a remote control. <em>The whole agent.</em></h2>
+          <p class="section-lede">Most mobile AI apps are a window into someone else's server. Pi Voice is different: the agent runs on the phone in your hand, with the same powers it has on a laptop.</p>
+          <ul class="pillars">
+            <li class="pillar reveal">
+              <span class="card-icon"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m4 17 6-6-6-6M12 19h8"/></svg></span>
+              <div><h3>It works where your code lives</h3><p>Pi runs in Termux with a real shell: it edits files, runs tests, installs packages and uses git, the GitHub CLI and SSH — on your phone.</p></div>
+            </li>
+            <li class="pillar reveal">
+              <span class="card-icon"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="4" y="4" width="16" height="16" rx="2"/><rect x="9" y="9" width="6" height="6"/><path d="M15 2v2M9 2v2M15 20v2M9 20v2M2 15h2M2 9h2M20 15h2M20 9h2"/></svg></span>
+              <div><h3>Your model, your choice</h3><p>Use any provider Pi supports — or serve a local model with llama.cpp or Ollama right on the phone. Then your code and prompts never leave the device.</p></div>
+            </li>
+            <li class="pillar reveal">
+              <span class="card-icon"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg></span>
+              <div><h3>No server in between</h3><p>The app, its host and Pi talk over <code>127.0.0.1</code>. No Pi Voice cloud, no account, no relay — and no one else's machine running your agent.</p></div>
+            </li>
+          </ul>
+        </div>
+        <figure class="term reveal" aria-label="Example: Pi working on the phone with a local model">
+          <div class="term-bar"><span></span><span></span><span></span><em>Termux · pi</em></div>
+          <div class="term-body">
+            <p class="term-dim">~/projects/web-app · on this phone</p>
+            <p><span class="term-you">you</span> Fix the login redirect, run the tests and open a PR.</p>
+            <p><span class="term-tool">edit</span> src/auth/callback.ts</p>
+            <p><span class="term-tool">bash</span> npm test <span class="term-ok">✓ 48 passing</span></p>
+            <p><span class="term-tool">bash</span> git commit -am "Fix login redirect"</p>
+            <p><span class="term-tool">bash</span> gh pr create --fill <span class="term-ok">#12 opened</span></p>
+            <p class="term-pi"><span>π</span> Done. Tests pass, and pull request #12 is open on GitHub.</p>
+          </div>
+          <figcaption><span class="term-dot" aria-hidden="true"></span>model: qwen2.5-coder · llama.cpp · 127.0.0.1:8080</figcaption>
+        </figure>
       </div>
     </section>
 
@@ -86,7 +125,7 @@
         <div class="section-head">
           <p class="eyebrow">How it works</p>
           <h2>Three steps. <em>No keyboard.</em></h2>
-          <p class="section-lede">Pi already does the work in Termux. Pi Voice takes the typing out of it — and tells you when it's finished.</p>
+          <p class="section-lede">Pi already does the work on your phone. Pi Voice takes the typing out of it — and tells you when it's finished.</p>
         </div>
         <ol class="steps">
           <li class="step reveal">
@@ -101,8 +140,8 @@
           </li>
           <li class="step reveal">
             <span class="step-num" aria-hidden="true">3</span>
-            <h3>Get on with your day</h3>
-            <p>Pi works in the background. A chime tells you when the reply lands — or a notification, if you've left the app.</p>
+            <h3>Pi does the work, on your phone</h3>
+            <p>Pi edits files, runs commands and pushes to GitHub right on your device. A chime tells you when it's done — or a notification, if you've left the app.</p>
           </li>
         </ol>
       </div>
@@ -207,7 +246,7 @@
         <div>
           <p class="eyebrow">Local by design</p>
           <h2>Private by architecture, <em>not by promise.</em></h2>
-          <p class="section-lede">The app talks to a small host in Termux over your phone's loopback interface, and the host talks to your Pi sessions. There is no Pi Voice server on the internet to trust, because there isn't one.</p>
+          <p class="section-lede">The app talks to a small host in Termux over your phone's loopback interface, and the host talks to your Pi sessions. There is no Pi Voice server on the internet to trust, because there isn't one. Add a local model, and your code never leaves the phone at all.</p>
           <ul class="ticks ticks-wide">
             <li>The host and every session listen only on <code>127.0.0.1</code>, behind a random 256-bit token.</li>
             <li>Notifications are signed and tied to their conversation, so other apps can't fake them.</li>
@@ -215,14 +254,14 @@
             <li>Speech recognition uses Android's own service, which may process audio online — choose an offline voice if that matters to you.</li>
           </ul>
         </div>
-        <figure class="diagram reveal" aria-label="How data flows: the app talks to the Pi Voice host on the phone, the host to your Pi sessions, and only Pi talks to your model provider">
+        <figure class="diagram reveal" aria-label="How data flows: the app talks to the Pi Voice host on the phone, the host to your Pi sessions, and Pi to your model — a local one on the phone, or a provider">
           <div class="node"><img class="node-icon node-art" src="assets/favicon-192.png" width="48" height="48" alt=""><strong>Pi Voice app</strong><span>Your phone</span></div>
           <div class="link"><span>127.0.0.1 · token</span></div>
           <div class="node"><span class="node-icon mono">&gt;_</span><strong>Pi Voice host</strong><span>In Termux · runs on its own</span></div>
           <div class="link"><span>127.0.0.1 · token</span></div>
           <div class="node node-stack"><span class="node-icon">π</span><strong>Your Pi sessions</strong><span>Each in its own terminal</span></div>
-          <div class="link link-out"><span>your API key</span></div>
-          <div class="node node-out"><span class="node-icon"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M17.5 19a4.5 4.5 0 1 0-1.4-8.78A6 6 0 1 0 6 16.5"/><path d="M6 16.5h11.5"/></svg></span><strong>Your model provider</strong><span>Exactly as with Pi alone</span></div>
+          <div class="link"><span>local · or your API key</span></div>
+          <div class="node node-out"><span class="node-icon"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="4" y="4" width="16" height="16" rx="2"/><rect x="9" y="9" width="6" height="6"/><path d="M15 2v2M9 2v2M15 20v2M9 20v2M2 15h2M2 9h2M20 15h2M20 9h2"/></svg></span><strong>Your model</strong><span>On the phone, or any provider Pi supports</span></div>
         </figure>
       </div>
     </section>
@@ -286,6 +325,14 @@ npm run native:install -- --enable</code></pre>
         </div>
         <div class="faq-list">
           <details>
+            <summary>Does the agent really run on my phone?</summary>
+            <p>Yes. Pi runs in Termux on your Android phone and works with the phone's own files and tools: it edits code, runs commands, installs packages and uses git and GitHub there. Only the language model can be elsewhere — at a provider of your choice, or on the phone too.</p>
+          </details>
+          <details>
+            <summary>Can it run completely offline?</summary>
+            <p>Yes, with a local model served by llama.cpp or Ollama in Termux, plus Android's offline speech recognition and voices. How fast and capable that is depends on your phone and the model size: small local models are quicker to run but less capable than large hosted ones.</p>
+          </details>
+          <details>
             <summary>Does Pi Voice work without Pi?</summary>
             <p>No. Pi Voice is an interface for the <a href="https://github.com/earendil-works/pi">Pi coding agent</a>. Pi must already be installed and configured with your model provider in Termux. Pi Voice adds voice input, notifications and a phone-friendly view on top.</p>
           </details>
@@ -307,7 +354,7 @@ npm run native:install -- --enable</code></pre>
           </details>
           <details>
             <summary>Does it cost anything?</summary>
-            <p>Pi Voice is free and its source is on <a href="https://github.com/Endogen/pi-voice">GitHub</a>. Model usage is billed by your provider, as with Pi alone.</p>
+            <p>Pi Voice is free and its source is on <a href="https://github.com/Endogen/pi-voice">GitHub</a>. With a local model there are no API costs at all; with a hosted model, usage is billed by your provider, as with Pi alone.</p>
           </details>
         </div>
       </div>
@@ -317,7 +364,7 @@ npm run native:install -- --enable</code></pre>
     <section class="final">
       <div class="glow glow-c" aria-hidden="true"></div>
       <div class="wrap final-inner reveal">
-        <h2>Your agent is already on your phone. <em>Give it a voice.</em></h2>
+        <h2>A whole coding agent in your pocket. <em>Give it a voice.</em></h2>
         <div class="cta-row cta-center">
           <a class="button button-primary" href="https://github.com/Endogen/pi-voice/releases/latest/download/pi-voice.apk">
             <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3v12M7 10l5 5 5-5M5 21h14"/></svg>
