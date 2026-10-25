@@ -1,16 +1,15 @@
 # Changelog
 
-## Unreleased
+## 3.0.0 — Pi Voice app 3.0.0 (versionCode 8)
 
+- Restored the original opaque icon for the Android app/launcher only. Loading screens (including the Android 12+ system splash), web favicons and all other logo uses retain the new transparent artwork. APK update required.
 - Matched the reference chat spacing with 12px mobile composer side gutters, symmetric 16px reply-text gutters, and a 20px composer bottom gap in addition to system safe areas. No APK update required for this stylesheet change.
 - Fixed reply-notification navigation being dropped while sending, preparing images, starting sessions or connecting. The newest tap waits until it can open, and stale state/list responses cannot undo it.
 - Notification targets now sign and verify the conversation ID as well as the worker handle. Stopped or replaced conversations show an explicit error instead of silently falling back to another session. Updated APK required for new v3 broadcasts; v2 handle-only alerts remain accepted by the new APK.
 - Native notification requests remain pending until the page confirms the matching conversation was rendered, survive Activity recreation, and are not erased by ordinary launcher intents. Opening one conversation no longer clears every session’s reply notification.
 - Added deterministic frontend race tests and executable Java notification identity/lifecycle checks. Actual Android notification delivery and task restoration still require device testing.
 
-## 3.0.0
-
-- New transparent app icon combines the mathematical π symbol with a microphone. The app preserves its original framing; GitHub Pages uses tightly cropped 16px, 32px and 192px favicons for clearer browser tabs.
+- New transparent π-and-microphone artwork for loading screens and in-app logos preserves its original framing; GitHub Pages uses tightly cropped 16px, 32px and 192px favicons for clearer browser tabs. The Android launcher retains the original opaque icon.
 - Independent Termux host owns the app connection, session registry, and lifecycle. Every managed session, including the first, can close without interrupting other workers.
 - Closing the last session leaves a connected empty screen; restarting the host reattaches surviving workers and preserves intentional closures.
 - Stable session handles, process-instance checks, atomic lifecycle records, serialized capacity reservations, and idempotent launch/restore requests.

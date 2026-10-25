@@ -4,7 +4,7 @@ Package `com.pivoice.app`, label **Pi Voice**. This document covers how the app 
 
 ## What the app does
 
-- An app-drawer/home-screen entry with a native loading screen and explicit error/retry controls.
+- An app-drawer/home-screen entry with a native loading screen and explicit error/retry controls. Only the Android app/launcher icon uses the original opaque artwork; the native loading panel, Android 12+ system splash and all web/in-app logos keep the transparent artwork. The build packages these as separate drawables.
 - Fixed **background** Termux commands start, resume or reuse Pi without opening a Termux window.
 - The chat interface served by the Pi extension opens **inside Android WebView**, without a browser address bar. It needs an up-to-date Android System WebView.
 - Speech uses **Android SpeechRecognizer**; **Read aloud** uses Android **TextToSpeech**, starts only when tapped and stops on pause, recording or session changes. A native document picker serves the paperclip; confirmation dialogs and Android Back are integrated.

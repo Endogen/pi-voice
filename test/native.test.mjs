@@ -1,6 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import http from 'node:http';
+import { createHash } from 'node:crypto';
 import { mkdtemp, mkdir, readFile, writeFile, rm, access } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
@@ -98,6 +99,37 @@ test('native setup is explicit and preserves unrelated Termux properties and com
   const appended = enableExternalApps('# allow-external-apps = false');
   assert.match(appended, /^# allow-external-apps = false\n/);
   assert.match(appended, /\nallow-external-apps=true\n$/);
+});
+
+test('Android launcher keeps the original opaque icon separate from the transparent logo', async () => {
+  const launcher = await readFile(new URL('../artwork/icon-launcher-512.png', import.meta.url));
+  const logo = await readFile(new URL('../public/icon-512.png', import.meta.url));
+  for (const image of [launcher, logo]) {
+    assert.deepEqual(image.subarray(0, 8), Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]));
+    assert.equal(image.readUInt32BE(16), 512);
+    assert.equal(image.readUInt32BE(20), 512);
+  }
+  assert.equal(launcher[25], 2, 'The launcher is opaque RGB, not the transparent RGBA logo');
+  assert.equal(logo[25], 6, 'The shared logo retains its alpha channel');
+  assert.equal(createHash('sha256').update(launcher).digest('hex'), '418a2ac6551f0e466c9a066a8931e1789ccf92056c3e7001de7038dbccef3349', 'Use the exact original 512px export from be008a7');
+  const build = await readFile(new URL('../native/build.mjs', import.meta.url), 'utf8');
+  assert.ok(build.includes("await copyFile(new URL('../artwork/icon-launcher-512.png', import.meta.url), join(root, 'res/drawable/launcher.png'));"));
+  assert.ok(build.includes("await copyFile(new URL('../public/icon-512.png', import.meta.url), join(root, 'res/drawable/icon.png'));"));
+  const manifest = await readFile(new URL('../native/AndroidManifest.xml', import.meta.url), 'utf8');
+  assert.match(manifest, /<application[^>]*android:icon="@drawable\/launcher"/);
+  assert.doesNotMatch(manifest, /<activity[^>]*android:(?:icon|roundIcon)=/, 'The launcher Activity must inherit the application icon');
+});
+
+test('native loading panel and Android 12+ splash retain the transparent logo', async () => {
+  const source = await readFile(new URL('../native/java/com/pivoice/app/MainActivity.java', import.meta.url), 'utf8');
+  assert.match(source, /icon\.setImageResource\(com\.pivoice\.app\.R\.drawable\.icon\)/);
+  const styles = await readFile(new URL('../native/res/values/styles.xml', import.meta.url), 'utf8');
+  assert.match(styles, /<style name="BaseAppTheme" parent="android:style\/Theme.Material.NoActionBar">/);
+  assert.match(styles, /<style name="AppTheme" parent="BaseAppTheme" \/>/);
+  assert.doesNotMatch(styles, /windowSplashScreen/, 'API 31 splash attributes must not leak into older Android resources');
+  const splash = await readFile(new URL('../native/res/values-v31/styles.xml', import.meta.url), 'utf8');
+  assert.match(splash, /<style name="AppTheme" parent="BaseAppTheme">/);
+  assert.match(splash, /<item name="android:windowSplashScreenAnimatedIcon">@drawable\/icon<\/item>/, 'Without an override Android would reuse the opaque launcher icon');
 });
 
 test('native Android contract has fixed commands, non-exported result receiver and a narrow JS bridge', async () => {

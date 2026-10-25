@@ -235,7 +235,7 @@ To rotate the token, quit all Pi instances and stop the Pi Voice service, then d
 | `image-attachments.mjs`, `wake-lock.mjs` | Upload validation and limits; Termux wake-lock leases. |
 | `src/` | Interface logic and the safe Markdown renderer. `npm run build` bundles it into `public/app.js`. |
 | `public/` | The page served to the app: HTML, CSS, icons and the generated bundle. |
-| `artwork/` | Approved transparent icon master and generation prompts. `public/` exports preserve its framing for the Android launcher (512px) and app favicon (192px); `docs/assets/favicon-*.png` crop excess padding for small browser tabs. |
+| `artwork/` | Original opaque Android launcher icon, approved transparent logo master and generation prompts. Transparent `public/` exports preserve the logo's framing for loading/in-app use (512px) and the app favicon (192px); `docs/assets/favicon-*.png` crop excess padding for small browser tabs. |
 | `native/` | Android app, background host and installer; see [native/README.md](native/README.md). |
 | `vendor/markdown-it/` | Bundled Markdown parser (MIT) with license and provenance. |
 | `DESIGN.md` | Interface design notes. `docs/screenshots/` are taken from the real interface against a mock bridge. |

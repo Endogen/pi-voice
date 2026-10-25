@@ -1,10 +1,12 @@
 Pi Voice icon — approved concept B
 Generated using the built-in image_gen tool; icon.png is the original opaque reference.
 icon-transparent.png is the approved transparent master (1254 x 1254).
-The public/ 512px and 192px exports preserve the master's full canvas and original icon framing.
+icon-launcher-512.png is the original opaque 512px export from be008a7, used only for the Android app/launcher icon.
+The public/ 512px and 192px exports preserve the transparent master's full canvas and original icon framing; loading screens and all other logo uses keep these transparent assets.
 GitHub Pages favicons use a 949 x 949 crop at x=153, y=152, keeping the whole microphone and a small margin without stretching its proportions. Exports are 16px, 32px and 192px PNGs with alpha.
 
 Export commands (macOS sips):
+sips -z 512 512 artwork/icon.png --out artwork/icon-launcher-512.png
 sips -z 512 512 artwork/icon-transparent.png --out public/icon-512.png
 sips -z 192 192 artwork/icon-transparent.png --out public/icon-192.png
 sips --cropToHeightWidth 949 949 --cropOffset 152 153 artwork/icon-transparent.png --out /tmp/pi-voice-favicon-cropped.png
