@@ -26,7 +26,7 @@
 
   <header class="nav" id="top">
     <div class="wrap nav-inner">
-      <a class="brand" href="#top" aria-label="Pi Voice home"><span class="brand-mark" aria-hidden="true">π</span><span>Pi Voice</span></a>
+      <a class="brand" href="#top" aria-label="Pi Voice home"><img class="brand-mark" src="assets/favicon-192.png" width="32" height="32" alt=""><span>Pi Voice</span></a>
       <nav aria-label="Sections">
         <a href="#how">How it works</a>
         <a href="#features">Features</a>
@@ -48,13 +48,13 @@
       <div class="glow glow-b" aria-hidden="true"></div>
       <div class="wrap hero-grid">
         <div class="hero-copy">
-          <a class="badge reveal" href="https://github.com/Endogen/pi-voice/blob/main/CHANGELOG.md"><span class="badge-dot" aria-hidden="true"></span>New in 2.2 — reply notifications &amp; haptics<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12h14M13 6l6 6-6 6"/></svg></a>
+          <a class="badge reveal" href="https://github.com/Endogen/pi-voice/blob/main/CHANGELOG.md"><span class="badge-dot" aria-hidden="true"></span>New in 3.0 — sessions that run on their own<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12h14M13 6l6 6-6 6"/></svg></a>
           <h1 class="reveal">Talk to your coding agent. <em>Then put your phone away.</em></h1>
           <p class="lede reveal">Pi Voice is an Android app for the <a href="https://github.com/earendil-works/pi">Pi coding agent</a> running in Termux. Speak a task, check the transcript, send it — and get a nudge when Pi is done. No cloud, no server, no account.</p>
           <div class="cta-row reveal">
             <a class="button button-primary" href="https://github.com/Endogen/pi-voice/releases/latest/download/pi-voice.apk">
               <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3v12M7 10l5 5 5-5M5 21h14"/></svg>
-              <span>Download for Android<small>APK · version 2.2</small></span>
+              <span>Download for Android<small>APK · version 3.0</small></span>
             </a>
             <a class="button button-ghost" href="https://github.com/Endogen/pi-voice">View on GitHub</a>
           </div>
@@ -97,7 +97,7 @@
           <li class="step reveal">
             <span class="step-num" aria-hidden="true">2</span>
             <h3>Review &amp; send</h3>
-            <p>Check the transcript, fix a word if needed, attach a screenshot, and send it to Pi. Or switch on auto-send.</p>
+            <p>Check the transcript, fix a word if needed, attach a screenshot. Nothing goes to Pi until you tap Send.</p>
           </li>
           <li class="step reveal">
             <span class="step-num" aria-hidden="true">3</span>
@@ -133,12 +133,12 @@
         <article class="feature feature-flip reveal">
           <div class="feature-copy">
             <span class="feature-tag">Parallel sessions</span>
-            <h3>Start something new while Pi is busy</h3>
-            <p>Kick off a second conversation without stopping the first. Switch between them, and see at a glance which one just finished. If your phone stopped Pi overnight, your conversations come back with a tap.</p>
+            <h3>Run conversations side by side</h3>
+            <p>Every new conversation gets its own Pi, so starting one never interrupts another — even mid-reply. Switch between them, see at a glance which one just finished, and close any of them without touching the rest.</p>
             <ul class="ticks">
-              <li>Up to four sessions side by side</li>
+              <li>Up to four sessions at once</li>
+              <li>Close any one, the others keep going</li>
               <li>Background replies are flagged</li>
-              <li>Restore after Android stops Termux</li>
             </ul>
           </div>
           <div class="feature-shot"><div class="phone"><img src="screenshots/sessions.png" width="780" height="1688" alt="The Sessions sheet with three running sessions and two stopped ones" loading="lazy"></div></div>
@@ -148,9 +148,9 @@
           <div class="feature-copy">
             <span class="feature-tag">Voice first</span>
             <h3>Built around your voice</h3>
-            <p>Push to talk, review before sending, and keep editing by hand when you want to. Replies can be read aloud on request — code blocks are skipped, so you hear the explanation, not the syntax.</p>
+            <p>Push to talk, check the transcript, and keep editing by hand when you want to. Nothing is sent until you tap Send — not by a misheard word, not by the Enter key. Replies can be read aloud on request; code blocks are skipped, so you hear the explanation, not the syntax.</p>
             <ul class="ticks">
-              <li>Review-before-send by default</li>
+              <li>Only the Send button sends</li>
               <li>Read aloud in your language</li>
               <li>Haptic feedback as you go</li>
             </ul>
@@ -170,12 +170,12 @@
           <div class="card reveal">
             <span class="card-icon"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 8a6 6 0 0 1 12 0c0 7 3 9 3 9H3s3-2 3-9M10.3 21a1.94 1.94 0 0 0 3.4 0"/></svg></span>
             <h3>Know when it's done</h3>
-            <p>A chime and a light vibration while the app is open; a notification with the start of the reply when it isn't.</p>
+            <p>A chime and a light vibration while the app is open; a notification when it isn't. Tapping it opens that exact conversation.</p>
           </div>
           <div class="card reveal">
             <span class="card-icon"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 12a9 9 0 1 0 2.6-6.4L3 8"/><path d="M3 3v5h5"/></svg></span>
             <h3>Picks up where you left off</h3>
-            <p>If Android stops Termux, opening the app restarts Pi and reopens the conversation you had open, in its own folder.</p>
+            <p>If Android stops Termux, opening the app brings back the conversation you had open. Pi sessions that survived are reattached as they were.</p>
           </div>
           <div class="card reveal">
             <span class="card-icon"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="3" width="18" height="18" rx="3"/><circle cx="9" cy="9" r="2"/><path d="m21 15-3.1-3.1a2 2 0 0 0-2.8 0L6 21"/></svg></span>
@@ -207,18 +207,20 @@
         <div>
           <p class="eyebrow">Local by design</p>
           <h2>Private by architecture, <em>not by promise.</em></h2>
-          <p class="section-lede">Pi Voice talks to Pi over your phone's loopback interface. There is no Pi Voice server to trust, because there is no Pi Voice server.</p>
+          <p class="section-lede">The app talks to a small host in Termux over your phone's loopback interface, and the host talks to your Pi sessions. There is no Pi Voice server on the internet to trust, because there isn't one.</p>
           <ul class="ticks ticks-wide">
-            <li>The bridge listens only on <code>127.0.0.1</code>, behind a random 256-bit token.</li>
-            <li>Notifications are signed, so other apps can't fake them.</li>
+            <li>The host and every session listen only on <code>127.0.0.1</code>, behind a random 256-bit token.</li>
+            <li>Notifications are signed and tied to their conversation, so other apps can't fake them.</li>
             <li>No account, no analytics, no telemetry. Pi Voice stores no audio.</li>
             <li>Speech recognition uses Android's own service, which may process audio online — choose an offline voice if that matters to you.</li>
           </ul>
         </div>
-        <figure class="diagram reveal" aria-label="How data flows: the app talks to Pi on the phone; only Pi talks to your model provider">
-          <div class="node"><span class="node-icon">π</span><strong>Pi Voice app</strong><span>Your phone</span></div>
+        <figure class="diagram reveal" aria-label="How data flows: the app talks to the Pi Voice host on the phone, the host to your Pi sessions, and only Pi talks to your model provider">
+          <div class="node"><img class="node-icon node-art" src="assets/favicon-192.png" width="48" height="48" alt=""><strong>Pi Voice app</strong><span>Your phone</span></div>
           <div class="link"><span>127.0.0.1 · token</span></div>
-          <div class="node"><span class="node-icon mono">&gt;_</span><strong>Pi in Termux</strong><span>Your phone</span></div>
+          <div class="node"><span class="node-icon mono">&gt;_</span><strong>Pi Voice host</strong><span>In Termux · runs on its own</span></div>
+          <div class="link"><span>127.0.0.1 · token</span></div>
+          <div class="node node-stack"><span class="node-icon">π</span><strong>Your Pi sessions</strong><span>Each in its own terminal</span></div>
           <div class="link link-out"><span>your API key</span></div>
           <div class="node node-out"><span class="node-icon"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M17.5 19a4.5 4.5 0 1 0-1.4-8.78A6 6 0 1 0 6 16.5"/><path d="M6 16.5h11.5"/></svg></span><strong>Your model provider</strong><span>Exactly as with Pi alone</span></div>
         </figure>
@@ -293,11 +295,11 @@ npm run native:install -- --enable</code></pre>
           </details>
           <details>
             <summary>Why does it need “Run commands in Termux”?</summary>
-            <p>That's how the app starts Pi in the background without opening a terminal window, restarts it when Android stopped it, and opens Pi's terminal when you ask. The app only runs its own fixed helper scripts and never accepts commands from other apps.</p>
+            <p>That's how the app starts the Pi Voice host and your Pi sessions in the background without opening a terminal window, brings them back when Android stopped them, and opens a session's terminal when you ask. The app only runs its own fixed helper scripts and never accepts commands from other apps.</p>
           </details>
           <details>
             <summary>Will Android kill Pi in the background?</summary>
-            <p>It can. Pi Voice holds Termux's wake lock while Pi runs, and you should set Termux's battery use to Unrestricted. If Android stops it anyway, opening the app restarts Pi and reopens your conversation.</p>
+            <p>It can. Pi Voice holds Termux's wake lock while Pi runs, and you should set Termux's battery use to Unrestricted. If Android stops it anyway, opening the app restarts the host, reattaches any Pi sessions that survived and reopens the conversation you had open.</p>
           </details>
           <details>
             <summary>Does my voice leave the phone?</summary>
@@ -319,7 +321,7 @@ npm run native:install -- --enable</code></pre>
         <div class="cta-row cta-center">
           <a class="button button-primary" href="https://github.com/Endogen/pi-voice/releases/latest/download/pi-voice.apk">
             <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3v12M7 10l5 5 5-5M5 21h14"/></svg>
-            <span>Download for Android<small>APK · version 2.2</small></span>
+            <span>Download for Android<small>APK · version 3.0</small></span>
           </a>
           <a class="button button-ghost" href="#install">Installation guide</a>
         </div>
@@ -330,7 +332,7 @@ npm run native:install -- --enable</code></pre>
   <footer class="footer">
     <div class="wrap footer-inner">
       <div class="footer-brand">
-        <a class="brand" href="#top"><span class="brand-mark" aria-hidden="true">π</span><span>Pi Voice</span></a>
+        <a class="brand" href="#top"><img class="brand-mark" src="assets/favicon-192.png" width="32" height="32" alt=""><span>Pi Voice</span></a>
         <p>A voice for the <a href="https://github.com/earendil-works/pi">Pi coding agent</a> on Android.</p>
       </div>
       <nav class="footer-links" aria-label="Footer">

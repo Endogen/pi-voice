@@ -50,7 +50,7 @@ svg .fill { fill: currentColor; stroke: none; }
 .nav.scrolled { background: rgb(11 16 32 / .78); backdrop-filter: blur(14px) saturate(140%); -webkit-backdrop-filter: blur(14px) saturate(140%); border-bottom-color: var(--line); }
 .nav-inner { display: flex; align-items: center; gap: 28px; height: 68px; }
 .brand { display: inline-flex; align-items: center; gap: 10px; font-weight: 700; font-size: 1.05rem; letter-spacing: -.01em; text-decoration: none; }
-.brand-mark { display: inline-grid; place-items: center; width: 32px; height: 32px; border-radius: 10px; background: var(--accent-soft); color: var(--accent); font: 400 1.35rem/1 var(--serif); box-shadow: inset 0 0 0 1px rgb(147 180 255 / .25); }
+.brand-mark { width: 34px; height: 34px; padding: 3px; border-radius: 10px; background: var(--accent-soft); box-shadow: inset 0 0 0 1px rgb(147 180 255 / .25); object-fit: contain; }
 .nav nav { display: flex; gap: 26px; margin-left: 16px; }
 .nav nav a { color: var(--muted); text-decoration: none; font-size: .94rem; font-weight: 500; transition: color .15s; }
 .nav nav a:hover { color: var(--text); }
@@ -171,9 +171,12 @@ h3 { font-size: 1.2rem; font-weight: 600; letter-spacing: -.01em; }
 .node > span:last-child { grid-column: 2; color: var(--subtle); font-size: .88rem; }
 .node-icon { grid-row: span 2; display: grid; place-items: center; width: 48px; height: 48px; border-radius: 14px; background: var(--accent-soft); color: var(--accent); font: 400 1.6rem/1 var(--serif); }
 .node-icon.mono { font: 500 1rem/1 var(--mono); }
+.node-art { padding: 6px; object-fit: contain; }
+/* Several Pi sessions: a stacked card. */
+.node-stack { position: relative; box-shadow: 6px 6px 0 -1px var(--ink), 6px 6px 0 0 var(--line-strong), 12px 12px 0 -1px var(--ink), 12px 12px 0 0 var(--line); margin-right: 12px; }
 .node-out { border-style: dashed; background: transparent; }
 .node-out .node-icon { background: rgb(255 255 255 / .05); color: var(--muted); }
-.link { position: relative; height: 64px; margin-left: 43px; border-left: 2px dashed rgb(147 180 255 / .45); }
+.link { position: relative; height: 56px; margin-left: 43px; border-left: 2px dashed rgb(147 180 255 / .45); }
 .link span { position: absolute; left: 18px; top: 50%; transform: translateY(-50%); font: 500 .78rem/1 var(--mono); color: var(--accent); padding: 6px 10px; border-radius: 8px; background: var(--accent-soft); }
 .link::after { content: ""; position: absolute; left: -6px; bottom: -2px; width: 10px; height: 10px; border-right: 2px solid rgb(147 180 255 / .6); border-bottom: 2px solid rgb(147 180 255 / .6); transform: rotate(45deg); }
 .link-out { border-left-color: rgb(255 255 255 / .2); }
