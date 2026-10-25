@@ -34,6 +34,7 @@ async function setup({ auto = false, speech = true, awake = true, confirmed = tr
     startSpeech: (id, lang) => nativeCalls.push({ method: 'start', id, lang }),
     stopSpeech: (id) => nativeCalls.push({ method: 'stop', id }),
     abortSpeech: (id) => nativeCalls.push({ method: 'abort', id }),
+    notificationHandled: (handle, sessionId, opened) => nativeCalls.push({ method: 'notification', handle, sessionId, opened }),
     ...(nativePlayback ? {
       speakText: (id, text, language) => nativeCalls.push({ method: 'read', id, text, language }),
       stopReading: (id) => nativeCalls.push({ method: 'stop-reading', id }),
@@ -1401,11 +1402,12 @@ test('a reply notification opens its session', async () => {
   h.sessions.push({ handle: 'session-300', instanceId: 'instance-300', status: 'ready', sessionId: 'three' });
   await h.context.window.__piVoiceOpenSession("session-300");
   await flush();
-  assert.equal(h.requests.at(-1).handle, 'session-300');
+  assert.equal(vm.runInContext('state.handle', h.context), 'session-300');
+  assert.deepEqual(h.nativeCalls.filter((call) => call.method === 'notification'), [{ method: 'notification', handle: 'session-300', sessionId: '', opened: true }]);
   h.context.window.__piVoiceOpenSession('300; alert(1)');
   h.context.window.__piVoiceOpenSession(-1);
   await flush();
-  assert.equal(h.requests.at(-1).handle, 'session-300');
+  assert.equal(vm.runInContext('state.handle', h.context), 'session-300');
 });
 
 test('a notification received before the initial connection waits for discovery and opens its session', async () => {
@@ -1419,6 +1421,214 @@ test('a notification received before the initial connection waits for discovery 
   release(Response.json(h.state));
   await flush(); await flush();
   assert.equal(vm.runInContext('state.handle', h.context), 'session-300');
+});
+
+function deferred() {
+  let resolve, reject;
+  const promise = new Promise((yes, no) => { resolve = yes; reject = no; });
+  return { promise, resolve, reject };
+}
+function notificationSession(h, handle = 'session-300', sessionId = 'conversation-three') {
+  const next = { ...h.state, handle, sessionId, instanceId: `instance-${handle}`, sessionName: 'Notified conversation', messages: [{ role: 'assistant', id: 'notified-reply', text: 'The notified answer' }] };
+  h.network.state = (target) => Response.json(target === handle ? next : h.state);
+  return next;
+}
+const notificationCalls = (h) => h.nativeCalls.filter((call) => call.method === 'notification');
+
+test('notification navigation does not depend on a cached session list and closes old sheets', async () => {
+  const h = await setup({ native: true });
+  const next = notificationSession(h);
+  h.el('draft').value = 'Keep my draft';
+  h.el('history-dialog').showModal();
+  // The list does not know about this session yet. Only its explicit state is authoritative.
+  assert.equal(h.context.window.__piVoiceOpenSession(next.handle, next.sessionId), true);
+  await flush(); await flush();
+  assert.equal(vm.runInContext('state.sessionId', h.context), next.sessionId);
+  assert.equal(h.el('history-dialog').open, false);
+  assert.equal(h.el('draft').value, 'Keep my draft');
+  assert.equal(notificationCalls(h).at(-1).opened, true);
+  assert.equal(h.context.window.__piVoiceOpenSession(next.handle, 'bad;identity'), false);
+  assert.equal(h.context.window.__piVoiceOpenSession(next.handle, null), false);
+});
+
+for (const failure of [false, true]) test(`a notification waits for an in-flight prompt (${failure ? 'failed' : 'accepted'}) rather than being dropped`, async () => {
+  const h = await setup({ native: true });
+  const next = notificationSession(h);
+  const prompt = deferred();
+  h.network.prompt = () => prompt.promise;
+  h.el('draft').value = 'A question for the original session';
+  const sending = vm.runInContext('send()', h.context);
+  h.context.window.__piVoiceOpenSession(next.handle, next.sessionId);
+  assert.equal(vm.runInContext('state.handle', h.context), h.state.handle, 'Never retarget a prompt in flight');
+  assert.equal(notificationCalls(h).length, 0);
+  if (failure) prompt.reject(new Error('lost connection'));
+  else prompt.resolve(Response.json({ ok: true }));
+  await sending; await flush(); await flush();
+  assert.equal(vm.runInContext('state.sessionId', h.context), next.sessionId);
+  assert.equal(h.prompts[0].sessionId, h.state.sessionId);
+  assert.equal(h.el('draft').value, failure ? 'A question for the original session' : '');
+  assert.equal(notificationCalls(h).at(-1).opened, true);
+});
+
+test('a notification waits for image preparation and keeps the prepared attachments', async () => {
+  const h = await setup({ native: true });
+  const next = notificationSession(h);
+  const decode = deferred();
+  h.imageProcessing.decode = () => decode.promise;
+  h.context.selectedFiles = [photo()];
+  const preparing = vm.runInContext('addImages(selectedFiles)', h.context);
+  h.context.window.__piVoiceOpenSession(next.handle, next.sessionId);
+  assert.equal(notificationCalls(h).length, 0);
+  decode.resolve({ width: 400, height: 300, close() {} });
+  await preparing; await flush(); await flush();
+  assert.equal(vm.runInContext('state.sessionId', h.context), next.sessionId);
+  assert.equal(vm.runInContext('attachments.length', h.context), 1);
+  assert.equal(h.prompts.length, 0);
+});
+
+test('a queued notification wins after a new-session launch finishes', async () => {
+  const h = await setup({ native: true });
+  const next = notificationSession(h);
+  vm.runInContext("spawnRequest = { id: 'operation-1234', deadline: Date.now() + 45000 }; controls()", h.context);
+  h.context.window.__piVoiceOpenSession(next.handle, next.sessionId);
+  assert.equal(notificationCalls(h).length, 0);
+  h.sessions.push({ handle: 'spawned-session', status: 'ready', operationId: 'operation-1234' });
+  await vm.runInContext('pollSessions()', h.context);
+  await flush(); await flush();
+  assert.equal(vm.runInContext('state.sessionId', h.context), next.sessionId);
+  assert.equal(vm.runInContext('spawnRequest', h.context), undefined);
+});
+
+test('a notification deferred during session startup is opened when startup settles', async () => {
+  const h = await setup({ native: true });
+  const next = notificationSession(h);
+  h.state.newSessionAction = { status: 'starting' };
+  await vm.runInContext('poll()', h.context);
+  h.context.window.__piVoiceOpenSession(next.handle, next.sessionId);
+  assert.equal(notificationCalls(h).length, 0);
+  delete h.state.newSessionAction;
+  await vm.runInContext('poll()', h.context);
+  await flush(); await flush();
+  assert.equal(vm.runInContext('state.sessionId', h.context), next.sessionId);
+});
+
+test('a session-list response started before a notification cannot undo its explicit target', async () => {
+  const h = await setup({ native: true });
+  const next = notificationSession(h);
+  const list = deferred();
+  h.network.sessions = () => list.promise;
+  const listing = vm.runInContext('pollSessions()', h.context);
+  h.context.window.__piVoiceOpenSession(next.handle, next.sessionId);
+  await flush(); await flush();
+  assert.equal(vm.runInContext('state.sessionId', h.context), next.sessionId);
+  list.resolve(Response.json({ sessions: h.sessions }));
+  await listing;
+  assert.equal(vm.runInContext('targetHandle', h.context), next.handle);
+  assert.equal(vm.runInContext('state.sessionId', h.context), next.sessionId);
+});
+
+for (const status of [410, 502]) test(`an unavailable notification (${status}) never silently falls back to another conversation`, async () => {
+  const h = await setup({ native: true });
+  h.network.state = (handle) => handle === 'session-300' ? Response.json({ error: 'Session unavailable' }, { status }) : Response.json(h.state);
+  h.context.window.__piVoiceOpenSession('session-300', 'conversation-three');
+  await flush(); await flush();
+  assert.equal(vm.runInContext('state', h.context), undefined, 'An unrelated old answer is not left on screen');
+  assert.equal(vm.runInContext('targetHandle', h.context), 'session-300');
+  assert.equal(h.el('send').disabled, true);
+  assert.match(h.el('notice').textContent, /notified conversation is unavailable/);
+  await vm.runInContext('pollSessions(); poll()', h.context);
+  assert.equal(vm.runInContext('targetHandle', h.context), 'session-300', 'Missing from the list is not permission to show another Pi');
+  assert.equal(notificationCalls(h).length, 0, 'The native request is not acknowledged as shown');
+  vm.runInContext(`switchTo('${h.state.handle}')`, h.context);
+  await flush(); await flush();
+  assert.equal(vm.runInContext('state.handle', h.context), h.state.handle, 'Explicit manual selection can recover');
+  assert.equal(notificationCalls(h).at(-1).opened, false);
+});
+
+test('a stopped notification target can still be discovered and explicitly restored', async () => {
+  const h = await setup({ native: true });
+  h.network.state = (handle) => handle === 'session-300' ? Response.json({ error: 'Stopped' }, { status: 410 }) : Response.json(h.state);
+  h.context.window.__piVoiceOpenSession('session-300', 'conversation-three');
+  await flush(); await flush();
+  h.stopped.push({ handle: 'session-300', restorable: true, title: 'Notified conversation' });
+  await vm.runInContext('pollSessions()', h.context);
+  assert.equal(h.el('restore-banner').hidden, false);
+  assert.equal(vm.runInContext('stopped[0].handle', h.context), 'session-300');
+  await vm.runInContext('restoreSession(stopped[0])', h.context);
+  const restore = h.requests.find((r) => r.path === '/api/session/restore');
+  assert.equal(restore.body.handle, 'session-300');
+  assert.equal(notificationCalls(h).at(-1).opened, false, 'Restore is an explicit action, not successful notification navigation yet');
+});
+
+test('a list fetched during notification loading cannot revert a successfully opened target', async () => {
+  const h = await setup({ native: true });
+  const next = notificationSession(h);
+  const state = deferred();
+  const list = deferred();
+  h.network.state = () => state.promise;
+  h.network.sessions = () => list.promise;
+  h.context.window.__piVoiceOpenSession(next.handle, next.sessionId);
+  const listing = vm.runInContext('pollSessions()', h.context);
+  state.resolve(Response.json(next));
+  await flush(); await flush();
+  list.resolve(Response.json({ sessions: h.sessions }));
+  await listing;
+  assert.equal(vm.runInContext('state.sessionId', h.context), next.sessionId);
+  assert.equal(vm.runInContext('targetHandle', h.context), next.handle);
+});
+
+test('a notification for a replaced conversation is rejected before display or persistent selection', async () => {
+  const h = await setup({ native: true });
+  const next = notificationSession(h, 'session-300', 'replacement-conversation');
+  const start = h.requests.length;
+  h.context.window.__piVoiceOpenSession(next.handle, 'original-conversation');
+  await flush(); await flush();
+  assert.equal(vm.runInContext('state', h.context), undefined);
+  assert.match(h.el('notice').textContent, /different conversation/);
+  assert.equal(h.requests.slice(start).some((r) => r.path === '/api/session/select'), false);
+  assert.equal(notificationCalls(h).length, 0);
+});
+
+test('after rejecting an old notification, the user can explicitly open the replacement in the same worker', async () => {
+  const h = await setup({ native: true });
+  const next = notificationSession(h, 'session-300', 'replacement-conversation');
+  h.context.window.__piVoiceOpenSession(next.handle, 'original-conversation');
+  await flush(); await flush();
+  assert.equal(vm.runInContext('state', h.context), undefined);
+  vm.runInContext(`switchTo('${next.handle}')`, h.context);
+  await flush(); await flush();
+  assert.equal(vm.runInContext('state.sessionId', h.context), next.sessionId);
+  assert.equal(notificationCalls(h).at(-1).opened, false, 'An explicit choice overrides rather than acknowledges the old notification');
+});
+
+test('newest notification wins over a late state response or failure from the previous tap', async () => {
+  for (const failure of [false, true]) {
+    const h = await setup({ native: true });
+    const previous = deferred();
+    const newest = { ...h.state, handle: 'session-newest', sessionId: 'newest-conversation' };
+    h.network.state = (handle) => handle === 'session-previous' ? previous.promise : Response.json(newest);
+    h.context.window.__piVoiceOpenSession('session-previous', 'previous-conversation');
+    h.context.window.__piVoiceOpenSession(newest.handle, newest.sessionId);
+    if (failure) previous.reject(new Error('old worker failed'));
+    else previous.resolve(Response.json({ ...h.state, handle: 'session-previous', sessionId: 'previous-conversation' }));
+    await flush(); await flush();
+    assert.equal(vm.runInContext('state.sessionId', h.context), newest.sessionId);
+    assert.equal(notificationCalls(h).length, 1);
+    assert.equal(notificationCalls(h)[0].handle, newest.handle);
+    assert.equal(notificationCalls(h)[0].opened, true);
+  }
+});
+
+test('a cold-start notification still opens if the initial default state request fails', async () => {
+  const first = deferred();
+  const h = await setup({ native: true, initialState: () => first.promise });
+  const next = notificationSession(h);
+  h.context.window.__piVoiceOpenSession(next.handle, next.sessionId);
+  first.reject(new Error('default worker disappeared'));
+  await flush(); await flush();
+  assert.equal(vm.runInContext('state.sessionId', h.context), next.sessionId);
+  assert.equal(notificationCalls(h).at(-1).opened, true);
+  assert.equal(h.nativeCalls.some((call) => call.method === 'reconnect'), false);
 });
 
 test('a parallel session killed without cleanup reloads host selection instead of sticking', async () => {

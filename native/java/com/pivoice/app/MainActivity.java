@@ -57,7 +57,7 @@ public final class MainActivity extends Activity {
     private static final String ROOT = HOME + "/pi-voice";
     private static final String RUN_PERMISSION = "com.termux.permission.RUN_COMMAND";
     private static final int COMMAND_PERMISSION = 10, MICROPHONE_PERMISSION = 11, FILE_PICKER = 12, NOTIFICATION_PERMISSION = 13;
-    static final String EXTRA_HANDLE = "com.pivoice.app.HANDLE", EXTRA_OPEN_KEY = "com.pivoice.app.OPEN_KEY";
+    static final String EXTRA_HANDLE = "com.pivoice.app.HANDLE", EXTRA_SESSION_ID = "com.pivoice.app.SESSION_ID", EXTRA_OPEN_KEY = "com.pivoice.app.OPEN_KEY";
     private static WeakReference<MainActivity> active = new WeakReference<>(null);
     private final Handler handler = new Handler(Looper.getMainLooper());
     private FrameLayout root;
@@ -74,7 +74,8 @@ public final class MainActivity extends Activity {
     private SpeechRecognizer recognizer;
     private String speechId, speechLanguage;
     private ReplySpeaker replySpeaker;
-    private String openHandle;
+    private final SessionOpenRequest openRequest = new SessionOpenRequest();
+    private int openDeliveryAttempts;
 
     /** True while the chat is on screen; the page then handles reply alerts itself. */
     static boolean inForeground() {
@@ -87,7 +88,10 @@ public final class MainActivity extends Activity {
         active = new WeakReference<>(this);
         getWindow().setSoftInputMode(WindowManager.LayoutParams.SOFT_INPUT_ADJUST_RESIZE);
         createViews();
-        takeOpenRequest(getIntent());
+        // Saved state, including an already-consumed request, takes precedence
+        // over the original launch Intent (which Android may retain for the task).
+        if (state != null) openRequest.take(state.getString(EXTRA_HANDLE), state.getString(EXTRA_SESSION_ID), true);
+        else takeOpenRequest(getIntent());
         connect();
     }
 
@@ -102,14 +106,31 @@ public final class MainActivity extends Activity {
 
     private void takeOpenRequest(Intent intent) {
         String handle = intent == null ? null : intent.getStringExtra(EXTRA_HANDLE);
+        String sessionId = intent == null ? null : intent.getStringExtra(EXTRA_SESSION_ID);
         String key = intent == null ? null : intent.getStringExtra(EXTRA_OPEN_KEY);
-        openHandle = handle != null && handle.matches("[a-zA-Z0-9-]{8,80}") && key != null && key.equals(Prefs.openKey(this)) ? handle : null;
+        // A plain launcher intent must not erase an earlier notification tap.
+        if (openRequest.take(handle, sessionId, key != null && key.equals(Prefs.openKey(this)))) openDeliveryAttempts = 0;
     }
 
     private void openRequestedSession() {
-        if (openHandle == null || !trustedPage()) return;
-        String handle = openHandle; openHandle = null;
-        web.evaluateJavascript("window.__piVoiceOpenSession && window.__piVoiceOpenSession(" + JSONObject.quote(handle) + ")", null);
+        if (openRequest.handle == null || !resumed || !trustedPage() || panel.getVisibility() != View.GONE || openDeliveryAttempts >= 20) return;
+        openDeliveryAttempts++;
+        String handle = openRequest.handle, sessionId = openRequest.sessionId;
+        String script = "typeof window.__piVoiceOpenSession === 'function' && window.__piVoiceOpenSession("
+            + JSONObject.quote(handle) + "," + JSONObject.quote(sessionId == null ? "" : sessionId) + ") === true";
+        // Keep the request through WebView pauses, reloads and Activity recreation.
+        // Acceptance is not completion: notificationHandled acknowledges the render.
+        web.evaluateJavascript(script, accepted -> {
+            if (!"true".equals(accepted) && openRequest.matches(handle, sessionId)) {
+                handler.postDelayed(this::openRequestedSession, 250);
+            }
+        });
+    }
+
+    @Override protected void onSaveInstanceState(Bundle state) {
+        super.onSaveInstanceState(state);
+        state.putString(EXTRA_HANDLE, openRequest.handle);
+        state.putString(EXTRA_SESSION_ID, openRequest.sessionId);
     }
 
     private int dp(int value) { return Math.round(value * getResources().getDisplayMetrics().density); }
@@ -326,7 +347,7 @@ public final class MainActivity extends Activity {
 
     private final class LocalClient extends WebViewClient {
         @Override public void onPageStarted(WebView view, String url, android.graphics.Bitmap icon) {
-            pageReady = false;
+            pageReady = false; openDeliveryAttempts = 0;
             replySpeaker.stop();
         }
         @Override public boolean shouldOverrideUrlLoading(WebView view, WebResourceRequest request) {
@@ -470,6 +491,23 @@ public final class MainActivity extends Activity {
                 && (Build.VERSION.SDK_INT < 33 || checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) == PackageManager.PERMISSION_GRANTED);
             return allowed ? "on" : "off";
         }
+        @JavascriptInterface public void notificationHandled(String handle, String sessionId, boolean opened) {
+            if (!SessionOpenRequest.validHandle(handle) || (sessionId != null && !sessionId.isEmpty() && !SessionOpenRequest.validSessionId(sessionId))) return;
+            handler.post(() -> {
+                if (!trustedPage() || !resumed || panel.getVisibility() != View.GONE) return;
+                if (openRequest.complete(handle, sessionId)) {
+                    // Do not replay the original notification after recreation.
+                    Intent intent = getIntent();
+                    if (intent != null) {
+                        intent.removeExtra(EXTRA_HANDLE); intent.removeExtra(EXTRA_SESSION_ID); intent.removeExtra(EXTRA_OPEN_KEY);
+                    }
+                }
+                if (opened) {
+                    NotificationManager notifications = getSystemService(NotificationManager.class);
+                    if (notifications != null) notifications.cancel(SessionOpenRequest.tag(handle, sessionId), 0);
+                }
+            });
+        }
         @JavascriptInterface public void reconnect() {
             // Same as tapping the app icon: start or resume Pi via Termux. No
             // arguments: what to resume comes from Pi's private state only.
@@ -583,9 +621,10 @@ public final class MainActivity extends Activity {
     @Override protected void onResume() {
         super.onResume();
         resumed = true; web.onResume(); web.resumeTimers();
-        // Opening the app shows the replies; their notifications are done.
-        NotificationManager notifications = getSystemService(NotificationManager.class);
-        if (notifications != null) notifications.cancelAll();
+        openDeliveryAttempts = 0;
+        // A notification is retired only when its conversation is actually shown.
+        // Other sessions' notifications must remain independently tappable.
+        openRequestedSession();
         // Permission results can arrive before the Activity regains foreground.
         if (speechId != null && recognizer == null && checkSelfPermission(Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED) beginSpeech();
     }

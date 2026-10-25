@@ -365,7 +365,7 @@ test('a finished run with a new reply alerts the app once; runs without one do n
   h.branch.push({ type: 'message', id: 'reply-1', message: { role: 'assistant', content: [{ type: 'thinking', thinking: 'hidden' }, { type: 'text', text: 'All **12** tests pass.' }] } });
   h.events.get('agent_settled')({}, h.ctx);
   assert.equal(alerts.length, 1);
-  assert.deepEqual([alerts[0].pid, alerts[0].title, alerts[0].text, alerts[0].token], [process.pid, 'Test session', 'All **12** tests pass.', ep.token]);
+  assert.deepEqual([alerts[0].pid, alerts[0].title, alerts[0].text, alerts[0].token, alerts[0].handle, alerts[0].sessionId], [process.pid, 'Test session', 'All **12** tests pass.', ep.token, ep.handle, 'test-session']);
   h.events.get('agent_settled')({}, h.ctx);
   assert.equal(alerts.length, 1, 'A repeated settle does not alert twice');
 });

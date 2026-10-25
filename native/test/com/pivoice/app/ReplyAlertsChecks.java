@@ -28,6 +28,15 @@ public final class ReplyAlertsChecks {
         StringBuilder long_ = new StringBuilder();
         for (int i = 0; i <= ReplyAlerts.MAX_TEXT; i++) long_.append('x');
         check(!ReplyAlerts.verify(token, ReplyAlerts.signature(token, "session-handle", 1, time, "", long_.toString()), "session-handle", 1, time, "", long_.toString(), time), "bounded text");
+        String conversation = "conversation-one";
+        String v3 = "8e8bf8ff2f26041ee90787d8d853997efaf4f85b829eb2c832bcbd745305052f";
+        check(v3.equals(ReplyAlerts.signature(token, "session-handle", conversation, 4321, time, "Fix tests", text)), "v3 signature matches the extension");
+        check(ReplyAlerts.verify(token, v3, "session-handle", conversation, 4321, time, "Fix tests", text, time), "conversation-bound alert accepted");
+        check(!ReplyAlerts.verify(token, v3, "session-handle", "conversation-two", 4321, time, "Fix tests", text, time), "conversation ID is signed");
+        check(!ReplyAlerts.verify(token, v3, "session-handle", null, 4321, time, "Fix tests", text, time), "cannot downgrade v3 to v2");
+        check(!ReplyAlerts.verify(token, expected, "session-handle", conversation, 4321, time, "Fix tests", text, time), "v2 signature cannot claim a conversation");
+        check(!ReplyAlerts.verify(token, v3, "session-handle", "", 4321, time, "Fix tests", text, time), "empty conversation rejected");
+        check(!ReplyAlerts.verify(token, v3, "session-handle", "bad\nidentity", 4321, time, "Fix tests", text, time), "invalid conversation rejected");
         check(Haptics.constant("tap", 26) == 1 && Haptics.constant("toggle", 26) == 3 && Haptics.constant("tick", 26) == 4, "basic haptics");
         check(Haptics.constant("confirm", 30) == 16 && Haptics.constant("confirm", 29) == 1, "confirm falls back before Android 11");
         check(Haptics.constant("reject", 30) == 17 && Haptics.constant("reject", 29) == 0, "reject falls back before Android 11");

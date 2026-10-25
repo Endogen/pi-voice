@@ -8,6 +8,9 @@ test('reply signatures match the native receiver', () => {
   // Same vector as native/test/com/pivoice/app/ReplyAlertsChecks.java.
   assert.equal(replySignature(token, { handle: 'session-handle', pid: 4321, time: 1700000000000, title: 'Fix tests', text: 'All 12 pass — ünïcode.' }),
     '94bfbad76a05b36bff7212fc919f9c4e9ee73911f628684e31afd74b36b6d13d');
+  const fields = { handle: 'session-handle', sessionId: 'conversation-one', pid: 4321, time: 1700000000000, title: 'Fix tests', text: 'All 12 pass — ünïcode.' };
+  assert.equal(replySignature(token, fields), '8e8bf8ff2f26041ee90787d8d853997efaf4f85b829eb2c832bcbd745305052f');
+  assert.notEqual(replySignature(token, { ...fields, sessionId: 'conversation-two' }), replySignature(token, fields));
 });
 
 test('notification text is a short plain excerpt of the Markdown reply', () => {
@@ -35,4 +38,14 @@ test('alerts go through Termux am with fixed arguments, only on Android', () => 
   assert.equal(sendReplyAlert({ token, handle: 'session-handle', pid: 1, title: 't', text: 't', env: { PREFIX: '/usr/local' }, run }), false);
   assert.equal(sendReplyAlert({ token: 'short', pid: 1, title: 't', text: 't', env, run }), false);
   assert.equal(calls.length, 2);
+  assert.equal(sendReplyAlert({ token, handle: 'session-handle', sessionId: 'conversation-one', pid: 77, title: 'Fix tests', text: 'Done', time: 5, env, run }), true);
+  const v3args = calls[2][1];
+  const v3 = (name) => v3args[v3args.indexOf(name) + 1];
+  assert.equal(v3('version'), '3');
+  assert.equal(v3('sessionId'), 'conversation-one');
+  assert.equal(v3('signature'), replySignature(token, { handle: 'session-handle', sessionId: 'conversation-one', pid: 77, time: 5, title: 'Fix tests', text: 'Done' }));
+  for (const sessionId of ['', 'bad\nidentity', 'x'.repeat(129)]) {
+    assert.equal(sendReplyAlert({ token, handle: 'session-handle', sessionId, pid: 77, env, run }), false);
+  }
+  assert.equal(calls.length, 3);
 });

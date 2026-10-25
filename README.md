@@ -139,7 +139,7 @@ The model selected in Pi must accept images; otherwise sending is refused with a
 When Pi finishes a reply:
 
 - **While the app is open,** it plays a short chime and vibrates lightly. This also happens when a session in the background finishes.
-- **While the app is in the background or closed,** Android shows a notification with the start of the reply. Tapping it opens that session. Opening the app clears these notifications.
+- **While the app is in the background or closed,** Android shows a notification with the start of the reply. Tapping it opens that exact conversation, waiting for any send or image preparation to finish first. Other sessions’ notifications remain available. If the conversation has stopped or changed, the app shows an error and offers Sessions/Restore instead of silently opening a different conversation.
 
 The app also vibrates lightly when you start recording, send, switch sessions and pull down far enough to refresh. Notifications, the chime and haptics each have a switch under **Settings → Replies & feedback**. The notification sound and how notifications appear are Android settings: long-press a Pi Voice notification, or open **Android Settings → Apps → Pi Voice → Notifications**. Android 13 and newer ask for permission the first time.
 

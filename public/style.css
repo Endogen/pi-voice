@@ -28,7 +28,8 @@ svg .filled { fill: currentColor; stroke: none; }
 
 .workspace {
   width: min(100%, 820px); height: 100vh; height: 100dvh; margin: 0 auto;
-  padding: calc(var(--inset-top) + 4px) calc(var(--inset-right) + 10px) calc(var(--inset-bottom) + 8px) calc(var(--inset-left) + 10px);
+  /* Keep the composer clear of the edges and gesture bar, matching the reference chat UI. */
+  padding: calc(var(--inset-top) + 4px) calc(var(--inset-right) + 12px) calc(var(--inset-bottom) + 20px) calc(var(--inset-left) + 12px);
   display: grid; grid-template-rows: auto minmax(0, 1fr) auto; grid-template-columns: minmax(0, 1fr); gap: 4px;
 }
 
@@ -80,7 +81,7 @@ nav { display: flex; align-items: center; }
 .read-button.active { color: var(--accent); background: var(--accent-soft); }
 .read-button.active .when-idle { display: none; }
 .read-button.active .when-active { display: block; }
-.answer-pane { flex: 1; min-height: 0; overflow: auto; overscroll-behavior: contain; scrollbar-width: thin; padding: 0 4px 16px 2px; overflow-wrap: anywhere; line-height: 1.6; }
+.answer-pane { flex: 1; min-height: 0; overflow: auto; overscroll-behavior: contain; scrollbar-width: thin; padding: 0 4px 16px; overflow-wrap: anywhere; line-height: 1.6; }
 .answer-pane > * { max-width: 72ch; }
 .empty-answer { display: flex; flex-direction: column; justify-content: center; align-items: center; text-align: center; color: var(--muted); font-size: .9rem; padding-bottom: 8vh; }
 .idle-empty::before { content: "What should Pi do next?"; display: block; margin-bottom: 6px; color: var(--fg); font-size: 1.2rem; font-weight: 650; letter-spacing: -.01em; }
@@ -261,7 +262,6 @@ code { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; fo
   dialog.sheet { margin: auto; border-radius: 22px; border-bottom: 1px solid var(--border); max-height: calc(100dvh - 48px); }
 }
 @media (max-width: 350px) {
-  .workspace { padding-left: calc(var(--inset-left) + 6px); padding-right: calc(var(--inset-right) + 6px); }
   .icon-button { width: 40px; }
 }
 @media (max-height: 480px) {

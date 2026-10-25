@@ -21,12 +21,15 @@ public final class ReplyReceiver extends BroadcastReceiver {
     @Override public void onReceive(Context context, Intent intent) {
         if (intent == null || !ACTION.equals(intent.getAction())) return;
         SharedPreferences prefs = Prefs.get(context);
-        if (intent.getIntExtra("version", 0) != 2) return;
+        int version = intent.getIntExtra("version", 0);
+        if (version != 2 && version != 3) return;
         String handle = intent.getStringExtra("handle");
+        String sessionId = version == 3 ? intent.getStringExtra("sessionId") : null;
+        if (version == 3 && !SessionOpenRequest.validSessionId(sessionId)) return;
         int pid = intent.getIntExtra("pid", 0);
         long time = intent.getLongExtra("time", 0);
         String title = intent.getStringExtra("title"), text = intent.getStringExtra("text");
-        if (!ReplyAlerts.verify(prefs.getString(Prefs.TOKEN, null), intent.getStringExtra("signature"), handle, pid, time, title, text, System.currentTimeMillis())) return;
+        if (!ReplyAlerts.verify(prefs.getString(Prefs.TOKEN, null), intent.getStringExtra("signature"), handle, sessionId, pid, time, title, text, System.currentTimeMillis())) return;
         // While the app is open the page plays its own chime and haptics.
         if (MainActivity.inForeground() || !prefs.getBoolean(Prefs.NOTIFY, true)) return;
         if (Build.VERSION.SDK_INT >= 33 && context.checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED) return;
@@ -35,9 +38,10 @@ public final class ReplyReceiver extends BroadcastReceiver {
         ensureChannels(manager);
         String channel = prefs.getBoolean(Prefs.SOUND, true) ? CHANNEL : SILENT_CHANNEL;
         Intent open = new Intent(context, MainActivity.class).setAction(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_LAUNCHER)
-            .putExtra(MainActivity.EXTRA_HANDLE, handle).putExtra(MainActivity.EXTRA_OPEN_KEY, Prefs.openKey(context))
+            .putExtra(MainActivity.EXTRA_HANDLE, handle).putExtra(MainActivity.EXTRA_SESSION_ID, sessionId).putExtra(MainActivity.EXTRA_OPEN_KEY, Prefs.openKey(context))
             .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
-        PendingIntent tap = PendingIntent.getActivity(context, handle.hashCode(), open.setData(android.net.Uri.parse("pivoice-session:" + handle)), PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE);
+        String tag = SessionOpenRequest.tag(handle, sessionId);
+        PendingIntent tap = PendingIntent.getActivity(context, 0, open.setData(android.net.Uri.parse("pivoice-session:" + tag)), PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE);
         Notification hidden = new Notification.Builder(context, channel).setSmallIcon(R.drawable.notify).setContentTitle("Pi replied").build();
         String heading = title.isEmpty() ? "Pi replied" : title;
         Notification notification = new Notification.Builder(context, channel)
@@ -47,7 +51,7 @@ public final class ReplyReceiver extends BroadcastReceiver {
             .setAutoCancel(true).setContentIntent(tap).setWhen(time).setShowWhen(true)
             .build();
         // One notification per session: a newer reply replaces the older one.
-        manager.notify(handle, 0, notification);
+        manager.notify(tag, 0, notification);
     }
 
     static void ensureChannels(NotificationManager manager) {

@@ -281,6 +281,7 @@ let attachmentButtons = [];
 let readingSourceKey;
 // The independent host owns the connection; every conversation has an explicit handle.
 let targetHandle;
+let selectionVersion = 0;
 let selectionWrite = Promise.resolve();
 let sessions = [];
 let sessionsSupported = true;
@@ -413,7 +414,7 @@ function notice(text, error = false) {
   // Confirmations fade out; errors stay until the next action replaces them.
   if (text && !error) noticeTimer = setTimeout(() => { if ($('notice').textContent === text) notice(''); }, 6000);
 }
-const sessionReady = () => connected && Boolean(state?.handle) && !state?.empty;
+const sessionReady = () => connected && !switchPending && Boolean(state?.handle) && !state?.empty;
 const busyHere = () => Boolean(state?.busy || state?.pending || optimisticQuestion);
 const currentHandle = () => state?.handle;
 const folder = (path) => String(path || '').split('/').filter(Boolean).at(-1) || path || '';
@@ -451,6 +452,7 @@ function versions() {
   if (state && backend !== page) setText('version-hint', `This Pi still runs ${backend ? `the Pi Voice ${backend}` : 'an older Pi Voice'} backend. Restart Pi after its current task to finish updating.`);
 }
 function controls() {
+  openNotificationWhenReady();
   const switching = sessionStarting() || Boolean(spawnRequest) || switchPending;
   $('new-session').disabled = !connected || switching || sending || listening || preparingImages;
   $('sessions-new').disabled = $('new-session').disabled;
@@ -465,7 +467,7 @@ function controls() {
   header();
   versions();
   $('reconnect').hidden = !offline || !canReconnect();
-  $('restore-banner').hidden = !connected || !stopped.length;
+  $('restore-banner').hidden = (!connected && !notificationTarget) || !stopped.length;
   setText('restore-label', `${stopped.length} earlier session${stopped.length === 1 ? '' : 's'} stopped · Restore`);
   $('send').disabled = switching || !sessionReady() || sending || listening || preparingImages || (!$('draft').value.trim() && !attachments.length);
   $('attach').disabled = switching || !sessionReady() || sending || listening || preparingImages;
@@ -886,10 +888,34 @@ function checkSpawn() {
 }
 // Point every later request at another running Pi. Nothing unsent is moved:
 // the draft stays editable and the bridge rejects prompts for a stale session.
-function selectTarget(handle) {
-  targetHandle = handle || undefined;
-  if (handle) selectionWrite = selectionWrite.then(() => api('session/select', { method: 'POST', body: { handle }, handle: null }))
+function rememberSelection(handle) {
+  selectionWrite = selectionWrite.then(() => api('session/select', { method: 'POST', body: { handle }, handle: null }))
     .catch((error) => { if (targetHandle === handle) notice(error.message, true); });
+}
+function finishNotification(opened) {
+  const target = notificationTarget;
+  if (!target) return;
+  window.PiVoiceAndroid?.notificationHandled?.(target.handle, target.sessionId || '', opened);
+  notificationTarget = undefined;
+}
+function openNotificationWhenReady() {
+  const target = notificationTarget;
+  // A tap is durable, not a best-effort call to switchTo (which can be busy).
+  if (!target || target.started || sending || preparingImages || spawnRequest || sessionStarting()) return;
+  target.started = true;
+  selectTarget(target.handle, true);
+  // Never leave an unrelated reply visible while the notification is loading.
+  state = undefined;
+  for (const name of ['sessions', 'activity', 'history', 'settings']) $(`${name}-dialog`).close();
+  notice('Opening the notified conversation…');
+  void poll();
+}
+function selectTarget(handle, fromNotification = false) {
+  if (!fromNotification && notificationTarget?.started) finishNotification(false);
+  targetHandle = handle || undefined;
+  selectionVersion++;
+  // A notification's conversation identity must be checked before persisting it.
+  if (handle && !fromNotification) rememberSelection(handle);
   switchPending = true;
   pendingMessage = undefined;
   optimisticQuestion = undefined;
@@ -906,15 +932,17 @@ function switchTo(handle) {
   $('sessions-dialog').close();
   // While a switch loads, the session being opened is the one on screen.
   const showing = switchPending ? targetHandle : currentHandle();
-  if (handle === showing || sending || preparingImages || sessionStarting()) return;
+  if ((handle === showing && !notificationTarget) || sending || preparingImages || sessionStarting()) return;
   haptic('tap');
+  finishNotification(false);
   selectTarget(handle);
   notice('');
   controls();
   void poll();
 }
 async function restoreSession(item) {
-  if (!connected || spawnRequest || sending || listening) return;
+  if ((!connected && !notificationTarget) || spawnRequest || sending || listening) return;
+  finishNotification(false);
   const request = { id: crypto.randomUUID(), deadline: Date.now() + 45000, restored: true };
   spawnRequest = request;
   $('sessions-dialog').close();
@@ -1043,7 +1071,8 @@ function renderSessions() {
     : 'Restart Pi once to run and switch between parallel sessions.';
 }
 async function pollSessions() {
-  if (sessionsPolling || !connected || !sessionsSupported) return;
+  // The host's session/restore UI must work even when the notified worker is gone.
+  if (sessionsPolling || !sessionsSupported) return;
   sessionsPolling = true;
   try {
     const result = await api('sessions', { handle: null });
@@ -1056,15 +1085,10 @@ async function pollSessions() {
     }
     for (const handle of [...sessionBusy.keys()]) if (!list.some((item) => item.handle === handle)) { unread.delete(handle); sessionBusy.delete(handle); }
     sessions = list;
-    if (targetHandle && !list.some((item) => item.handle === targetHandle && item.status === 'ready')) selectTarget(undefined);
+    // A list is only a snapshot, never authority to change the displayed Pi.
+    // The explicit state request handles a worker that really became unavailable.
     stopped = Array.isArray(result.stopped) ? result.stopped : [];
     checkSpawn();
-    if (notificationTarget) {
-      const handle = notificationTarget;
-      notificationTarget = undefined;
-      if (list.some((item) => item.handle === handle && item.status === 'ready')) switchTo(handle);
-      else notice('That conversation is no longer running. Open Sessions to restore it.', true);
-    }
   } catch (error) {
     if ([404, 501].includes(error.status)) sessionsSupported = false;
   } finally {
@@ -1077,13 +1101,16 @@ async function poll() {
   if (polling) return;
   polling = true;
   const requested = targetHandle;
+  const version = selectionVersion;
   let stale = false;
+  let openedNotification = false;
+  const superseded = () => version !== selectionVersion;
   try {
     let next;
     try { next = await api('state', { handle: requested }); }
     catch (error) {
       // A worker stopped. The host stays available, including with zero workers.
-      if (requested && [410, 502].includes(error.status) && requested === targetHandle) {
+      if (requested && [410, 502].includes(error.status) && !superseded() && !notificationTarget) {
         selectTarget(undefined);
         stale = true;
         notice('That session is unavailable. Choose another session or Restore.', true);
@@ -1091,7 +1118,10 @@ async function poll() {
       }
       throw error;
     }
-    if (requested !== targetHandle) { stale = true; return; }
+    if (superseded()) { stale = true; return; }
+    if (notificationTarget?.started && (next.handle !== notificationTarget.handle || (notificationTarget.sessionId && next.sessionId !== notificationTarget.sessionId))) {
+      throw new Error('That notification belongs to a different conversation. Open Sessions to find or restore the original.');
+    }
     if (!targetHandle && next.handle) targetHandle = next.handle;
     const userSwitch = switchPending;
     switchPending = false;
@@ -1139,15 +1169,24 @@ async function poll() {
       void pollSessions();
     }
     if ($('history-dialog').open) renderMessages(next.messages);
-    if (notificationTarget) void pollSessions();
+    if (notificationTarget?.started) {
+      rememberSelection(next.handle);
+      notice('');
+      openedNotification = true;
+    }
   } catch (error) {
-    if (requested !== targetHandle) { stale = true; return; }
+    if (superseded()) { stale = true; return; }
     connected = false;
     offline = true;
     setText('connection', 'Disconnected');
     $('connection').classList.toggle('disconnected', true);
     if (error.status !== 401) wakeInitialized = false;
-    if (error.status === 401) notice(error.message, true);
+    if (notificationTarget) {
+      reconnectOnFailure = false;
+      notice(error.status === 401 ? error.message : error.status === 410 || error.status === 502
+        ? 'The notified conversation is unavailable. Open Sessions to restore it or choose another session.'
+        : error.status ? 'Could not open the notified conversation. Try again or open Sessions.' : error.message || 'Could not reach the notified conversation. Try again or open Sessions.', true);
+    } else if (error.status === 401) notice(error.message, true);
     else if (reconnectOnFailure && canReconnect()) { reconnectOnFailure = false; reconnect(); }
     else notice(canReconnect() ? 'Pi isn’t running. Tap Reconnect to start it and resume your conversation.'
       : window.PiVoiceAndroid ? 'Pi isn’t running. Update the Pi Voice app to reconnect from here, or close the app and tap its icon.'
@@ -1155,6 +1194,7 @@ async function poll() {
   } finally {
     polling = false;
     controls();
+    if (openedNotification) finishNotification(true);
     if (stale) void poll();
   }
 }
@@ -1325,11 +1365,13 @@ for (const id of ['notify', 'sound', 'haptics']) {
   });
 }
 // From a reply notification: show the session it came from.
-window.__piVoiceOpenSession = async (handle) => {
-  if (typeof handle !== 'string' || !/^[a-zA-Z0-9-]{8,80}$/.test(handle)) return;
-  notificationTarget = handle;
-  if (!connected) { void poll(); return; }
-  await pollSessions();
+window.__piVoiceOpenSession = (handle, sessionId = '') => {
+  if (typeof handle !== 'string' || !/^[a-zA-Z0-9-]{8,80}$/.test(handle) || typeof sessionId !== 'string' || (sessionId && !/^[a-zA-Z0-9-]{1,128}$/.test(sessionId))) return false;
+  if (notificationTarget?.handle === handle && notificationTarget.sessionId === sessionId) return true;
+  notificationTarget = { handle, sessionId, started: false };
+  reconnectOnFailure = false;
+  controls();
+  return true; // Accepted, not yet opened: Android waits for notificationHandled.
 };
 document.addEventListener('pointerdown', unlockAudio, { capture: true });
 for (const id of ['engine', 'language']) {

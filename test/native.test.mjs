@@ -105,13 +105,22 @@ test('native Android contract has fixed commands, non-exported result receiver a
   const manifest = await readFile(new URL('../native/AndroidManifest.xml', import.meta.url), 'utf8');
   const script = await readFile(new URL('../native/host.sh', import.meta.url), 'utf8');
   const methods = [...source.matchAll(/@JavascriptInterface public \w+ (\w+)/g)].map((match) => match[1]);
-  assert.deepEqual(methods, ['setUiPreference', 'speakText', 'stopReading', 'startSpeech', 'stopSpeech', 'abortSpeech', 'haptic', 'setReplyAlerts', 'replyAlertStatus', 'reconnect', 'openTerminal']);
+  assert.deepEqual(methods, ['setUiPreference', 'speakText', 'stopReading', 'startSpeech', 'stopSpeech', 'abortSpeech', 'haptic', 'setReplyAlerts', 'replyAlertStatus', 'notificationHandled', 'reconnect', 'openTerminal']);
   const receiver = await readFile(new URL('../native/java/com/pivoice/app/ReplyReceiver.java', import.meta.url), 'utf8');
   // Reply alerts: HMAC-verified before anything else, then only in the background.
   assert.match(receiver, /if \(!ReplyAlerts\.verify\(prefs\.getString\(Prefs\.TOKEN, null\)[^\n]+\) return;\s+\/\/[^\n]+\s+if \(MainActivity\.inForeground\(\)/);
   assert.match(receiver, /PendingIntent\.FLAG_IMMUTABLE/);
   assert.match(source, /JSONObject.quote\(handle\)/, 'Notification handles are quoted, never interpreted as script');
   assert.match(source, /key.equals\(Prefs.openKey\(this\)\)/);
+  assert.doesNotMatch(source, /cancelAll\(\)/, 'Opening one session must not dismiss other sessions’ replies');
+  assert.match(source, /openRequest\.complete\(handle, sessionId\)/, 'Only the matching page acknowledgement consumes a request');
+  assert.match(source, /onSaveInstanceState[\s\S]*?state.putString\(EXTRA_HANDLE, openRequest.handle\)/);
+  assert.match(source, /if \(state != null\) openRequest.take\([^\n]+\);\s+else takeOpenRequest\(getIntent\(\)\);/, 'Recreation cannot resurrect a consumed launch Intent');
+  assert.match(source, /openDeliveryAttempts >= 20/, 'A missing or outdated page hook cannot cause an unbounded retry loop');
+  assert.match(source, /intent.removeExtra\(EXTRA_HANDLE\)/, 'Consumed notifications are not replayed on recreation');
+  assert.match(source, /JSONObject.quote\(sessionId == null \? "" : sessionId\)/);
+  assert.match(receiver, /setData\(android.net.Uri.parse\("pivoice-session:" \+ tag\)\)/, 'PendingIntent identity includes the conversation, not just extras or a hash');
+  assert.match(receiver, /putExtra\(MainActivity.EXTRA_SESSION_ID, sessionId\)/);
   assert.equal([...manifest.matchAll(/android:exported="true"/g)].length, 2, 'Only the launcher Activity and the signed reply receiver are exported');
   assert.match(manifest, /<receiver android:name=".ReplyReceiver" android:exported="true" \/>/);
   assert.match(source, /public void reconnect\(\) \{[\s\S]*?if \(!trustedPage\(\) \|\| !resumed \|\| nonce != null\) return;\s+connect\(\);/, 'Reconnect takes no input and never overlaps an attempt');

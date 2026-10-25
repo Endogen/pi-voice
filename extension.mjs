@@ -260,7 +260,7 @@ export default function installVoiceExtension(pi, { wakeLock = createWakeLock({ 
     if (!bridge || !answer || answer.id === answerBefore) return;
     answerBefore = answer.id;
     try {
-      alert({ token: bridgeToken, pid: process.pid, handle, text: textOf(answer.message),
+      alert({ token: bridgeToken, pid: process.pid, handle, sessionId: ctx.sessionManager.getSessionId(), text: textOf(answer.message),
         title: ctx.sessionManager.getSessionName() || firstQuestion() || 'Pi replied' });
     } catch { /* Alerts are best effort. */ }
   };
