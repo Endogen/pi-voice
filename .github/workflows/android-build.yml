@@ -1,0 +1,74 @@
+name: Android release build
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  android:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - name: Check out the selected commit
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: '22'
+
+      - name: Set up Java
+        uses: actions/setup-java@cf277c60eb25467037889841efdb72551f06f6c3 # v4
+        with:
+          distribution: temurin
+          java-version: '21'
+
+      - name: Test the frontend and backend
+        run: npm test
+
+      - name: Prepare Android build tools
+        shell: bash
+        run: |
+          set -euo pipefail
+          "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" \
+            'platforms;android-35' 'build-tools;35.0.0'
+          prefix="$RUNNER_TEMP/pi-voice-tools"
+          mkdir -p "$prefix/bin"
+          for tool in aapt d8 zipalign apksigner; do
+            ln -s "$ANDROID_HOME/build-tools/35.0.0/$tool" "$prefix/bin/$tool"
+          done
+          for tool in javac keytool; do
+            ln -s "$JAVA_HOME/bin/$tool" "$prefix/bin/$tool"
+          done
+          echo "PREFIX=$prefix" >> "$GITHUB_ENV"
+          echo "ANDROID_JAR=$ANDROID_HOME/platforms/android-35/android.jar" >> "$GITHUB_ENV"
+
+      # The normal build creates an ephemeral key in the runner's private home.
+      # Never upload that key. Download this APK and re-sign it locally with the
+      # maintainer key before publishing; CI needs no private signing secrets.
+      - name: Build and verify the APK
+        run: npm run build:native
+
+      - name: Record build provenance
+        shell: bash
+        run: |
+          {
+            printf 'Source commit: %s\n' "$GITHUB_SHA"
+            printf 'GitHub build: %s/%s/actions/runs/%s\n' "$GITHUB_SERVER_URL" "$GITHUB_REPOSITORY" "$GITHUB_RUN_ID"
+            printf 'Node: %s\n' "$(node --version)"
+            printf 'Android platform: 35\nAndroid build tools: 35.0.0\n'
+            printf 'The CI APK has a temporary signature; release assets are re-signed locally with the maintainer key.\n'
+          } > native/out/BUILD-INFO.txt
+
+      - name: Upload the APK, checksum and provenance
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: pi-voice-${{ github.sha }}
+          path: |
+            native/out/pi-voice.apk
+            native/out/pi-voice.apk.sha256
+            native/out/BUILD-INFO.txt
+          if-no-files-found: error
+          retention-days: 14

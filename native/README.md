@@ -98,6 +98,19 @@ The checksum/size are from Google's [SDK repository metadata](https://dl.google.
 
 `out/`, `tools/`, and generated PNG resources are ignored by native's `.gitignore`. Build tools/platform files add development storage; the APK itself is small because it reuses the installed WebView provider and local frontend.
 
+### Build on GitHub Actions
+
+The manually dispatched **Android release build** workflow (`.github/workflows/android-build.yml`) tests the checked-out commit and builds it on Ubuntu with Node 22, Java 21 and Android SDK 35. It uploads only the APK, its SHA-256 checksum and `BUILD-INFO.txt` with the source commit and build URL:
+
+```sh
+gh workflow run android-build.yml --ref main
+gh run list --workflow android-build.yml
+# Use the successful run's ID:
+gh run download RUN_ID --dir /path/to/downloads
+```
+
+The CI build uses an **ephemeral signing key**, never the maintainer's key. Its APK is a build artifact, not an in-place update for an existing release installation. Before publishing a release, verify the downloaded checksum, re-sign the APK locally with the existing private maintainer key, verify its certificate against the previous release, and regenerate `pi-voice.apk.sha256`. Publish that signed APK, the new checksum and the build provenance together. Neither a private signing key nor its password belongs in GitHub, an artifact or a release.
+
 ## Verification and remaining device checks
 
 ```sh
